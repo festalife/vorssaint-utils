@@ -3709,7 +3709,7 @@ struct MetricsTests {
         expect(registeredDefaults[DefaultsKey.panelShowToggles] as? Bool == true,
                "Quick toggles panel section is shown by default")
         expect([DefaultsKey.panelToggleDarkMode, DefaultsKey.panelToggleKeyboardLight,
-                DefaultsKey.panelToggleMicMute,
+                DefaultsKey.panelToggleMicMute, DefaultsKey.panelToggleExtraBrightness,
                 DefaultsKey.panelToggleEmptyTrash,
                 DefaultsKey.panelToggleEjectDisks, DefaultsKey.panelToggleHiddenFiles,
                 DefaultsKey.panelToggleDesktopIcons, DefaultsKey.panelToggleLockScreen,
@@ -21005,7 +21005,8 @@ struct MetricsTests {
                 && backupKeys.contains(DefaultsKey.panelToggleOrder)
                 && backupKeys.contains(DefaultsKey.panelToggleDarkMode)
                 && backupKeys.contains(DefaultsKey.panelToggleKeyboardLight)
-                && backupKeys.contains(DefaultsKey.panelToggleMicMute),
+                && backupKeys.contains(DefaultsKey.panelToggleMicMute)
+                && backupKeys.contains(DefaultsKey.panelToggleExtraBrightness),
                "the quick toggles layout travels with the settings backup")
         expect(backupKeys.contains(DefaultsKey.panelShowFanControl)
                 && backupKeys.contains(DefaultsKey.fanControlMode)
