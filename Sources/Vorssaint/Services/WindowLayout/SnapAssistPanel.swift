@@ -30,15 +30,71 @@ private final class KeyableSnapAssistPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-/// `acceptsFirstMouse` on the whole content view, in addition to
-/// `SnapAssistCardClickCatcher`'s own override on each card: belt and
-/// suspenders for the same "non-activating, momentarily-not-key panel"
-/// class of first-click loss every other genuinely clickable panel in this
-/// codebase (`CommandBarView`, `ClipboardHistoryService`,
-/// `ScratchpadView`, `ShelfTilesView`, …) already guards against on
-/// whichever of their subviews actually receives the click.
+/// Owns the click, computed directly against the grid geometry instead of
+/// through a SwiftUI `Button` or an `NSViewRepresentable` card catcher.
+///
+/// Real-Mac testing tried both: a plain `Button` never fired reliably in
+/// this non-activating, momentarily-not-key panel (spec §4 requires it stay
+/// non-activating), and swapping it for a per-card `NSViewRepresentable`
+/// overlay didn't help either — `NSHostingView`'s own `hitTest` resolves to
+/// *itself* for the whole content area regardless of what SwiftUI draws
+/// underneath, so a nested representable view is never actually the AppKit
+/// hit-test target a click resolves to; only this outermost view's own
+/// `mouseDown`/`mouseUp` ever fire. So this is the one place the click is
+/// definitely delivered, and hit-testing which card it landed on is done
+/// right here with the same pure geometry (`SnapAssistSupport.cellFrames`)
+/// the SwiftUI grid is conceptually laid out with — no dependency on
+/// SwiftUI's own view tree receiving or routing the event at all.
+///
+/// `acceptsFirstMouse` matters for the same reason every other genuinely
+/// clickable panel in this codebase overrides it (`CommandBarView`,
+/// `ClipboardHistoryService`, `ScratchpadView`, `ShelfTilesView`, …): a
+/// non-activating, momentarily-not-key panel must still process the very
+/// first click after it appears, not spend that click only bringing itself
+/// forward.
 private final class SnapAssistHostingView: NSHostingView<SnapAssistPanelView> {
+    // `rootView.state` rather than a separately stored property: NSHostingView
+    // already requires `init(rootView:)` as its designated initializer
+    // (`required`), and `SnapAssistPanelView` already carries the same state
+    // object hit-testing needs, so there is no reason to duplicate it.
+    private var panelState: SnapAssistPanelState { rootView.state }
+    private var isPressed = false
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        isPressed = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        // Dragging off the panel before releasing cancels the click,
+        // matching a normal button's behavior.
+        isPressed = isPressed && bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { isPressed = false }
+        guard isPressed else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point), let index = cardIndex(at: point) else { return }
+        guard panelState.items.indices.contains(index) else { return }
+        panelState.onSelect?(panelState.items[index])
+    }
+
+    /// Which card, if any, contains `point` — `point` in this view's own
+    /// (unflipped, bottom-left origin) AppKit coordinates, converted to the
+    /// top-left/row-major space `SnapAssistSupport.cellFrames` computes in,
+    /// which is the same space the SwiftUI grid's cards are conceptually
+    /// laid out in (`SnapAssistPanelView`'s `LazyVGrid`, top row first).
+    private func cardIndex(at point: NSPoint) -> Int? {
+        let topLeftPoint = CGPoint(x: point.x, y: bounds.height - point.y)
+        let frames = SnapAssistSupport.cellFrames(count: panelState.items.count,
+                                                  columns: max(1, panelState.columns),
+                                                  itemSize: SnapAssistPanel.itemSize,
+                                                  spacing: SnapAssistPanel.spacing,
+                                                  padding: SnapAssistPanel.padding)
+        return frames.firstIndex { $0.contains(topLeftPoint) }
+    }
 }
 
 /// Owns the floating Snap Assist overlay on `WindowLayoutService`'s behalf
@@ -47,7 +103,8 @@ private final class SnapAssistHostingView: NSHostingView<SnapAssistPanelView> {
 /// `SnapLayoutsPanel` — which only ever draws a highlight while the existing
 /// drag tap tracks hover and release — this panel is genuinely clickable:
 /// there is no drag in progress once a placement has already landed, so
-/// each card's own `SnapAssistCardClickCatcher` handles the pick directly.
+/// `SnapAssistHostingView`'s own `mouseDown`/`mouseUp` handle the pick
+/// directly (see its doc comment for why not a SwiftUI `Button`).
 final class SnapAssistPanel {
     private var panel: KeyableSnapAssistPanel?
     private let state = SnapAssistPanelState()
@@ -95,7 +152,10 @@ final class SnapAssistPanel {
     /// Spec §4 point 4: eight seconds of inactivity closes the overlay and
     /// leaves the space free, the same as Esc or a click elsewhere.
     private static let inactivityTimeout: TimeInterval = 8
-    private static let padding: CGFloat = 16
+    // Not private: `SnapAssistHostingView.cardIndex(at:)` hit-tests against
+    // this exact constant too, so the frame `layout` sizes the panel with
+    // and the frame a click is tested against can never disagree.
+    static let padding: CGFloat = 16
     private static let footerHeight: CGFloat = 28
     private static let outerInset: CGFloat = 6
     static let itemSize = CGSize(width: 116, height: 92)
@@ -230,6 +290,16 @@ final class SnapAssistPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.animationBehavior = .none
         let hostingView = SnapAssistHostingView(rootView: SnapAssistPanelView(state: state))
+        // Without this, NSHostingView silently grows its own window to its
+        // SwiftUI content's ideal size shortly after `setFrame` — real-Mac
+        // testing found the window widening itself from the intended 148pt
+        // (one column) to 161pt a moment after `show`, with `layout`'s own
+        // frame/column math never told about the change. Every card's
+        // clickable area is placed by that same math, so the grown window
+        // and the still-148pt-assumed card positions silently disagreed:
+        // a click aimed at a card's computed center landed on empty padding
+        // instead, hit nothing, and the pick never fired.
+        hostingView.sizingOptions = []
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView = hostingView
         self.panel = panel
