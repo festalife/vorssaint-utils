@@ -77,13 +77,25 @@ enum SnapGroupSupport {
     /// window away — rather than merely resizing it along its snapped edge —
     /// has opted back out, and free space computed for a neighbour must stop
     /// treating that window as blocking anything.
+    ///
+    /// The overlap fraction is against `min(zoneArea, currentArea)`, not
+    /// unconditionally the current frame's own area: dividing by the current
+    /// area alone made the headline feature evict its own subject — grow a
+    /// window along its snapped edge (exactly what free space exists to
+    /// track) and its current area grows too, shrinking the fraction even
+    /// though every point of the original zone is still covered. Dividing by
+    /// the smaller of the two rects asks the right question either way: has
+    /// the smaller shape lost at least half of itself into the other one.
     static func stillOverlapsZone(memberZone: CGRect, currentFrame: CGRect) -> Bool {
         guard currentFrame.width > 0, currentFrame.height > 0 else { return false }
         let intersection = memberZone.intersection(currentFrame)
         guard !intersection.isNull, !intersection.isEmpty else { return false }
         let overlapArea = intersection.width * intersection.height
+        let zoneArea = memberZone.width * memberZone.height
         let currentArea = currentFrame.width * currentFrame.height
-        return overlapArea / currentArea >= 0.5
+        let referenceArea = min(zoneArea, currentArea)
+        guard referenceArea > 0 else { return false }
+        return overlapArea / referenceArea >= 0.5
     }
 
     /// The group with every member dropped that Accessibility could no

@@ -6082,6 +6082,10 @@ struct MetricsTests {
         expect(!SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
                                                    currentFrame: .zero),
                "a zero-size current frame (a read that raced a close) never counts as overlapping")
+        expect(SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 400, height: 600),
+                                                  currentFrame: CGRect(x: 0, y: 0, width: 1200, height: 600)),
+               "a member grown to 3x its own zone width without moving stays in the group — the overlap " +
+               "fraction is against the smaller shape, not always the (now much larger) current frame")
 
         // Every Snap Group fixture below uses real zones from
         // WindowLayoutGeometry.rect, gapped exactly as production frames
@@ -6212,6 +6216,95 @@ struct MetricsTests {
                                                             currentFrames: [1: sgLeftZone])
         expect(sgGroupWithNewMember.members.count == 2 && sgGroupOnOtherScreen.members.isEmpty,
                "each screen keeps its own independent group; updating one never touches another's")
+
+        // Regression for a real-Mac E2E finding: a 1512x982 display, no
+        // gaps, window A snapped left then resized via Accessibility (not
+        // through Vorssaint) to 907pt wide — B snapping right must fill
+        // exactly the remaining 605pt, matching the exact numbers reported.
+        let sgRealScreen = CGRect(x: 0, y: 0, width: 1512, height: 949)
+        let sgRealLeftZone = WindowLayoutGeometry.rect(for: .leftHalf, current: sgRealScreen,
+                                                        visibleFrame: sgRealScreen, windowGap: 0)
+        let sgRealRightZone = WindowLayoutGeometry.rect(for: .rightHalf, current: sgRealScreen,
+                                                         visibleFrame: sgRealScreen, windowGap: 0)
+        let sgRealGroup = SnapGroup(screenID: 1,
+                                    members: [SnapGroupMember(windowID: 10, action: .leftHalf, frame: sgRealLeftZone)])
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf,
+                                          theoreticalZone: sgRealRightZone,
+                                          group: sgRealGroup,
+                                          gap: 0,
+                                          currentFrames: [10: CGRect(x: 0, y: 0, width: 907, height: 949)])
+               == CGRect(x: 907, y: 0, width: 605, height: 949),
+               "a neighbour resized outside Vorssaint (Accessibility setFrame, not a shortcut) still shrinks the next zone")
+
+        // Non-partial actions must never be adjusted, no matter how large or
+        // stale the group on that screen is — the guard has to be the very
+        // first thing freeSpace checks, before it even looks at members.
+        let sgStaleGroup = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 20, action: .leftHalf, frame: sgLeftZone),
+            SnapGroupMember(windowID: 21, action: .topRight, frame: sgTopRightZone),
+        ])
+        for nonPartial: WindowLayoutAction in [.maximize, .marginMaximize, .fullScreen, .center,
+                                               .previousDisplay, .nextDisplay, .restore] {
+            let untouched = CGRect(x: 0, y: 0, width: 1000, height: 600)
+            expect(SnapGroupSupport.freeSpace(for: nonPartial,
+                                              theoreticalZone: untouched,
+                                              group: sgStaleGroup,
+                                              gap: sgGap,
+                                              currentFrames: [:])
+                   == untouched,
+                   "\(nonPartial) is never adjusted, even against a non-empty group with no live frames at all")
+        }
+
+        // A member Accessibility can locate but that reads back as a
+        // degenerate (zero-size) frame — a race with a just-closed window,
+        // not a clean "no entry" miss — must prune exactly like a miss does.
+        let sgDegenerateGroup = SnapGroupSupport.pruned(group: sgGroup, currentFrames: [1: .zero])
+        expect(sgDegenerateGroup.members.isEmpty,
+               "a degenerate zero-size live frame prunes a member the same as a missing one")
+
+        // Panel-cell release with a real, non-empty group present: the same
+        // freeSpace call the panel's hit-tested action would feed through
+        // still resolves to a concrete, adjusted, non-degenerate rectangle.
+        let sgPanelGroup = SnapGroup(screenID: 1, members: [sgLeftMember])
+        let sgPanelResult = SnapGroupSupport.freeSpace(for: .rightHalf,
+                                                        theoreticalZone: sgRightZone,
+                                                        group: sgPanelGroup,
+                                                        gap: sgGap,
+                                                        currentFrames: [1: sgLeftResized])
+        expect(sgPanelResult.width > 0 && sgPanelResult.height > 0,
+               "a panel-cell placement against a live group always resolves to a usable, non-degenerate rectangle")
+
+        // Mixed-zone neighbours: a member snapped to one preset (a third)
+        // shrinks a request for a different preset (two-thirds) when their
+        // zones actually touch, and is correctly ignored when they don't —
+        // free space must work across presets, not just within one.
+        let sgMixedVisibleFrame = CGRect(x: 0, y: 0, width: 1200, height: 600)
+        func sgMixedZone(_ action: WindowLayoutAction) -> CGRect {
+            WindowLayoutGeometry.rect(for: action, current: sgMixedVisibleFrame,
+                                      visibleFrame: sgMixedVisibleFrame, windowGap: 0)
+        }
+        let sgLeftThirdZone = sgMixedZone(.leftThird)
+        let sgRightTwoThirdsZone = sgMixedZone(.rightTwoThirds)
+        let sgLeftThirdMember = SnapGroupMember(windowID: 30, action: .leftThird, frame: sgLeftThirdZone)
+        expect(SnapGroupSupport.freeSpace(for: .rightTwoThirds,
+                                          theoreticalZone: sgRightTwoThirdsZone,
+                                          group: SnapGroup(screenID: 1, members: [sgLeftThirdMember]),
+                                          gap: 0,
+                                          currentFrames: [30: CGRect(x: 0, y: 0, width: 600, height: 600)])
+               == CGRect(x: 600, y: 0, width: 600, height: 600),
+               "a leftThird neighbour grown to 600pt shrinks a touching rightTwoThirds request to match")
+
+        let sgLeftHalfZone = sgMixedZone(.leftHalf)
+        let sgRightThirdZone = sgMixedZone(.rightThird)
+        let sgLeftHalfMember = SnapGroupMember(windowID: 31, action: .leftHalf, frame: sgLeftHalfZone)
+        expect(SnapGroupSupport.freeSpace(for: .rightThird,
+                                          theoreticalZone: sgRightThirdZone,
+                                          group: SnapGroup(screenID: 1, members: [sgLeftHalfMember]),
+                                          gap: 0,
+                                          currentFrames: [31: CGRect(x: 0, y: 0, width: 700, height: 600)])
+               == sgRightThirdZone,
+               "a leftHalf neighbour grown to 700pt still falls short of a rightThird zone's own left edge " +
+               "(the untouched centerThird sits between them), so the rightThird request is left unadjusted")
 
         // MARK: Window move and resize gestures
 

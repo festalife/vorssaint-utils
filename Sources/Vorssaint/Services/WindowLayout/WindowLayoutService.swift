@@ -259,6 +259,13 @@ final class WindowLayoutService: ObservableObject {
             // it, snapped against the edge it came in through. Without a
             // display on that side the placement below simply leaves it where
             // it is.
+            //
+            // It leaves whatever Snap Group it belonged to on `screen` here,
+            // same as the dedicated previousDisplay/nextDisplay branch above
+            // — `applyPlacement` below only ever registers membership on
+            // `destination`, so without this its old screen's group would
+            // keep a stale entry for a window that is no longer there.
+            removeFromAllSnapGroups(target.windowID)
             return applyPlacement(crossing.action,
                                   to: target,
                                   visibleFrame: destination.visibleFrame,
@@ -490,31 +497,73 @@ final class WindowLayoutService: ObservableObject {
                                    visibleFrame: NSRect,
                                    fallbackFrame: WindowLayoutFrame,
                                    excluding windowID: CGWindowID?) -> CGRect {
+        // Non-partial actions (maximize, full screen, restore, center, a
+        // display change) never join a group and must never be adjusted —
+        // checked first, before resolving a screen or touching Accessibility
+        // at all, so a stale group on this screen can never influence one.
         guard fillsFreeSpaceEnabled, SnapGroupSupport.joinsGroup(action) else { return theoreticalZone }
-        guard let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame) else {
-            return theoreticalZone
-        }
-        var group = snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID)
+        guard let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame),
+              let storedGroup = snapGroups[screen.displayID], !storedGroup.members.isEmpty
+        else { return theoreticalZone }
+
+        // Prune against a live Accessibility read and persist the result
+        // before doing anything else: a member that closed, was minimized,
+        // or was dragged off its own zone is dropped from `snapGroups` right
+        // here, once, instead of being re-resolved (and re-failing) on every
+        // subsequent drag sample this same group is consulted for.
+        var group = prunedGroup(storedGroup, on: screen)
         if let windowID {
             group.members.removeAll { $0.windowID == windowID }
         }
         guard !group.members.isEmpty else { return theoreticalZone }
-        return SnapGroupSupport.freeSpace(for: action,
-                                          theoreticalZone: theoreticalZone,
-                                          group: group,
-                                          gap: WindowLayoutGaps.windowGap,
-                                          currentFrames: currentFrames(for: group))
+
+        let result = SnapGroupSupport.freeSpace(for: action,
+                                                theoreticalZone: theoreticalZone,
+                                                group: group,
+                                                gap: WindowLayoutGaps.windowGap,
+                                                currentFrames: currentFrames(for: group, on: screen))
+        // freeSpace() already falls back to theoreticalZone under its own
+        // minimum, but a defensive check costs nothing and keeps a
+        // degenerate rect (a bad Accessibility read producing NaN or an
+        // inverted size) from ever reaching a preview or setFrame.
+        guard result.width.isFinite, result.height.isFinite,
+              result.width > 0, result.height > 0
+        else { return theoreticalZone }
+        return result
+    }
+
+    /// Prunes `group` against Accessibility read right now and, if that
+    /// dropped anything, writes the smaller group back to `snapGroups` —
+    /// so a member that closed or drifted off its zone is forgotten once,
+    /// not re-resolved (and re-failed) on the next sample or placement.
+    private func prunedGroup(_ group: SnapGroup, on screen: NSScreen) -> SnapGroup {
+        let pruned = SnapGroupSupport.pruned(group: group, currentFrames: currentFrames(for: group, on: screen))
+        guard pruned.members.count != group.members.count else { return group }
+        if pruned.members.isEmpty {
+            snapGroups.removeValue(forKey: screen.displayID)
+        } else {
+            snapGroups[screen.displayID] = pruned
+        }
+        return pruned
     }
 
     /// The screen a previously computed `visibleFrame` belongs to. Matched
-    /// by value rather than kept as an `NSScreen` reference throughout,
-    /// since every caller here only ever carried the `CGRect` forward; falls
-    /// back to whichever screen the window itself currently overlaps most
-    /// when no screen's visible frame matches exactly (a display changed
-    /// resolution or was unplugged between the two reads).
+    /// by whichever screen's full `frame` contains that visible frame's
+    /// center point, not by comparing `visibleFrame` values for equality:
+    /// edge-snap dragging hovers right at a screen's physical edge, exactly
+    /// where the Dock or Notification Center can reveal itself and shift
+    /// `visibleFrame` between the moment a target was resolved and the
+    /// moment its placement is written — `frame` does not move with them.
+    /// Falls back to an exact `visibleFrame` match, then to whichever
+    /// screen the window itself currently overlaps most, for the remaining
+    /// edge case of a display actually reconfigured or unplugged between
+    /// the two reads.
     private func screen(matchingVisibleFrame visibleFrame: NSRect,
                         fallbackFrame: WindowLayoutFrame) -> NSScreen? {
-        NSScreen.screens.first { $0.visibleFrame == visibleFrame } ?? bestScreen(for: fallbackFrame)
+        let center = CGPoint(x: visibleFrame.midX, y: visibleFrame.midY)
+        return NSScreen.screens.first { $0.frame.contains(center) }
+            ?? NSScreen.screens.first { $0.visibleFrame == visibleFrame }
+            ?? bestScreen(for: fallbackFrame)
     }
 
     /// Records or replaces `windowID`'s Snap Group membership on the screen
@@ -533,7 +582,7 @@ final class WindowLayoutService: ObservableObject {
                                                windowID: windowID,
                                                action: action,
                                                appliedFrame: appliedRect,
-                                               currentFrames: currentFrames(for: group))
+                                               currentFrames: currentFrames(for: group, on: screen))
         if updated.members.isEmpty {
             snapGroups.removeValue(forKey: screen.displayID)
         } else {
@@ -553,15 +602,40 @@ final class WindowLayoutService: ObservableObject {
         }
     }
 
+    /// Per-screen cache of `rawCurrentFrames(for:)`, refreshed at most once
+    /// per `edgeSnapSampleInterval`. `updateEdgeSnapDrag` resolves a preview
+    /// target — and so consults a Snap Group's live frames — on every
+    /// sample once `drag.isMoving`, at up to 30 Hz; the sample-interval
+    /// throttle inside `updateEdgeSnapDrag` only gates *classification*, not
+    /// the target resolution that follows it every time. Without this
+    /// cache, a live drag would run a full `CGWindowListCopyWindowInfo` scan
+    /// plus one Accessibility round trip per group member on every single
+    /// mouse-moved event, and a member whose owning app has hung would
+    /// stall the main thread on every one of them instead of once every
+    /// ~33ms.
+    private var groupFramesCache: [CGDirectDisplayID: (frames: [CGWindowID: CGRect], at: TimeInterval)] = [:]
+
+    private func currentFrames(for group: SnapGroup, on screen: NSScreen) -> [CGWindowID: CGRect] {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let cached = groupFramesCache[screen.displayID], now - cached.at < edgeSnapSampleInterval {
+            return cached.frames
+        }
+        let frames = rawCurrentFrames(for: group)
+        groupFramesCache[screen.displayID] = (frames, now)
+        return frames
+    }
+
     /// Live frames for a Snap Group's members, read via Accessibility right
     /// now. Never `member.frame`, which is the zone a member was placed into
     /// and stays fixed as the neighbour-adjacency reference
-    /// (`SnapGroupSupport`); never cached, since noticing a hand-resized
-    /// neighbour is the entire point of this feature. A window whose owning
-    /// process cannot be found, or that reads back minimized, is simply left
-    /// out of the result — `SnapGroupSupport.pruned` is what then drops it
-    /// from the group, which is how a closed or minimized member leaves.
-    private func currentFrames(for group: SnapGroup) -> [CGWindowID: CGRect] {
+    /// (`SnapGroupSupport`); never cached at this layer (`currentFrames(for:
+    /// on:)` above is the caching wrapper every caller actually uses), since
+    /// noticing a hand-resized neighbour is the entire point of this
+    /// feature. A window whose owning process cannot be found, or that
+    /// reads back minimized, is simply left out of the result —
+    /// `SnapGroupSupport.pruned` is what then drops it from the group, which
+    /// is how a closed or minimized member leaves.
+    private func rawCurrentFrames(for group: SnapGroup) -> [CGWindowID: CGRect] {
         guard !group.members.isEmpty,
               let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements],
                                                        kCGNullWindowID) as? [[String: Any]]
