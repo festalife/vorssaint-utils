@@ -546,6 +546,48 @@ enum WindowEdgeSnapSupport {
         return nil
     }
 
+    /// The screen whose top edge a point counts as "near", using the exact
+    /// same `nearTop` test `target(at:)` uses — factored out so Snap
+    /// Layouts' panel and the classic corner/half snap can never disagree
+    /// about what the top hot zone is. Unlike `target(at:)` this does not
+    /// distinguish the corner sub-zones: Snap Layouts opens across the
+    /// whole top edge, and a release outside the panel's own width still
+    /// falls back to `target(at:)` for the existing top-left/top-right
+    /// behavior.
+    static func snapLayoutsTriggerScreen(at point: CGPoint,
+                                         screens: [WindowEdgeSnapScreen],
+                                         distance: CGFloat = activationDistance) -> WindowEdgeSnapScreen? {
+        let ordered = screens.enumerated().sorted {
+            distanceSquared(from: point, to: $0.element.frame)
+                < distanceSquared(from: point, to: $1.element.frame)
+        }
+        for (index, screen) in ordered {
+            let frame = screen.frame
+            guard frame.width > 0, frame.height > 0,
+                  screen.visibleFrame.width > 0, screen.visibleFrame.height > 0,
+                  point.x >= frame.minX - distance,
+                  point.x <= frame.maxX + distance,
+                  point.y >= frame.minY - distance,
+                  point.y <= frame.maxY + distance
+            else { continue }
+
+            let otherFrames = screens.enumerated().compactMap { offset, value in
+                offset == index ? nil : value.frame
+            }
+            let visibleTop = min(max(screen.visibleFrame.maxY, frame.minY), frame.maxY)
+            let physicalTop = CGPoint(x: point.x, y: frame.maxY)
+            let nearTop = point.y >= visibleTop - distance
+                && point.y <= frame.maxY + distance
+                && !hasNeighbor(beyond: .top,
+                                point: physicalTop,
+                                distance: distance,
+                                frames: otherFrames)
+            guard nearTop else { continue }
+            return screen
+        }
+        return nil
+    }
+
     private enum Edge {
         case left, right, top, bottom
     }

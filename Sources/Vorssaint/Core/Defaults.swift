@@ -583,6 +583,7 @@ enum DefaultsKey {
     static let windowDirectionalEnabled = "windowDirectionalEnabled"
     static let windowDirectionalShortcut = "windowDirectionalShortcut"
     static let windowEdgeSnapEnabled = "windowEdgeSnapEnabled"
+    static let windowSnapLayoutsEnabled = "windowSnapLayoutsEnabled"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1296,6 +1297,10 @@ enum Defaults {
         DefaultsKey.windowDirectionalEnabled: false,
         DefaultsKey.windowDirectionalShortcut: GlobalShortcut.windowDirectionalDefault.storageValue,
         DefaultsKey.windowEdgeSnapEnabled: false,
+        // On by default: this only ever shows once classic edge snapping is
+        // also on, so it never surfaces new behavior by itself — same
+        // reasoning Windows 11 uses shipping it on out of the box.
+        DefaultsKey.windowSnapLayoutsEnabled: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,

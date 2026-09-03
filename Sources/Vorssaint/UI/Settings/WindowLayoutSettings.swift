@@ -12,6 +12,7 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowDirectionalEnabled) private var directionalEnabled = false
     @AppStorage(DefaultsKey.windowDirectionalShortcut) private var directionalShortcutRaw = GlobalShortcut.windowDirectionalDefault.storageValue
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
+    @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
     @AppStorage(DefaultsKey.windowGestureEnabled) private var gestureEnabled = false
     @AppStorage(DefaultsKey.windowGestureModifiers) private var gestureModifiers = WindowGestureSupport.defaultModifierStorageValue
     @AppStorage(DefaultsKey.windowGestureRaiseWindow) private var gestureRaiseWindow = false
@@ -66,6 +67,15 @@ struct WindowLayoutSettings: View {
                         NSWorkspace.shared.open(WindowEdgeSnapSupport.desktopAndDockSettingsURL)
                     }
                     .controlSize(.small)
+                }
+                if edgeSnapEnabled {
+                    Toggle(text.snapLayoutsEnable, isOn: $snapLayoutsEnabled)
+                        .onChange(of: snapLayoutsEnabled) { _, _ in
+                            WindowLayoutService.shared.syncWithPreferences()
+                        }
+                    Text(text.snapLayoutsCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Divider()
                 Toggle(text.gestureEnable, isOn: $gestureEnabled)
