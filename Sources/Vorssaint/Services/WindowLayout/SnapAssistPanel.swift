@@ -14,6 +14,11 @@ final class SnapAssistPanelState: ObservableObject {
     @Published var items: [SwitcherItem] = []
     @Published var previews: [CGWindowID: CGImage] = [:]
     @Published var hint: String = ""
+    /// The fixed column count the panel's own frame was sized for
+    /// (`SnapAssistPanel.layout`). The view uses this exact number rather
+    /// than an adaptive grid, so the space the panel reserves and the grid
+    /// it draws can never disagree.
+    @Published var columns: Int = 1
     var onSelect: ((SwitcherItem) -> Void)?
 }
 
@@ -39,38 +44,49 @@ final class SnapAssistPanel {
     private var localClickMonitor: Any?
     private var outsideClickMonitor: Any?
     private var activationObserver: NSObjectProtocol?
+    private var screenParametersObserver: NSObjectProtocol?
     private var dismissTimer: Timer?
+    /// Set right before `WindowLayoutService` activates a candidate's app
+    /// itself, so the very `didActivateApplicationNotification` that
+    /// activation posts is not mistaken for the person switching away —
+    /// which would otherwise close the overlay (and defeat "try another
+    /// window" on a failed placement, spec §4 point 4) the instant a pick
+    /// is made, before the placement it triggered even has a result yet.
+    private var suppressNextActivationDismiss = false
 
     /// Spec §4 point 4: eight seconds of inactivity closes the overlay and
     /// leaves the space free, the same as Esc or a click elsewhere.
     private static let inactivityTimeout: TimeInterval = 8
     private static let padding: CGFloat = 16
+    private static let footerHeight: CGFloat = 28
+    private static let outerInset: CGFloat = 6
     static let itemSize = CGSize(width: 116, height: 92)
     static let spacing: CGFloat = 10
-    private static let maxColumns = 5
+    static let maxColumns = 5
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
-    /// Shows the overlay covering `freeRect` with `items` (already ordered
-    /// most-recently-used first, spec §4 point 1) and `hint` as its footer.
-    /// `onSelect` fires once, immediately followed by the panel hiding
-    /// itself — the caller decides what happens next (placing the window,
-    /// and by re-entering the same success path, whether another free cell
-    /// follows).
+    /// Shows the overlay covering `freeRect` (clamped to both `freeRect`
+    /// itself and `screen.visibleFrame`, spec §9's "never past the screen")
+    /// with `items` (already ordered most-recently-used first, spec §4
+    /// point 1) and `hint` as its footer. `onSelect` fires on every pick —
+    /// the caller decides whether that closes the overlay (a successful
+    /// placement re-enters `showSnapAssistIfNeeded`, which shows the next
+    /// cell or hides) or leaves it open (a failed one, so the person can
+    /// try another window).
     func show(in freeRect: CGRect,
+             on screen: NSScreen,
              items: [SwitcherItem],
              hint: String,
              onSelect: @escaping (SwitcherItem) -> Void) {
+        let (frame, columns) = layout(itemCount: items.count, freeRect: freeRect, visibleFrame: screen.visibleFrame)
         state.items = items
         state.previews = state.previews.filter { id, _ in items.contains { $0.windowID == id } }
         state.hint = hint
-        state.onSelect = { [weak self] item in
-            self?.hide()
-            onSelect(item)
-        }
+        state.columns = columns
+        state.onSelect = onSelect
 
         let panel = ensurePanel()
-        let frame = clampedFrame(covering: freeRect, itemCount: items.count)
         panel.setFrame(frame, display: true)
         if !panel.isVisible {
             panel.alphaValue = 0
@@ -95,6 +111,13 @@ final class SnapAssistPanel {
         state.previews[windowID] = image
     }
 
+    /// See `suppressNextActivationDismiss`'s doc comment. Called by
+    /// `WindowLayoutService` immediately before it activates a chosen
+    /// candidate's app.
+    func ignoreNextAppActivation() {
+        suppressNextActivationDismiss = true
+    }
+
     func hide() {
         dismissTimer?.invalidate()
         dismissTimer = nil
@@ -104,24 +127,48 @@ final class SnapAssistPanel {
         panel.orderOut(nil)
     }
 
-    /// A near-copy of the free rect, inset a little so the overlay reads as
-    /// covering the zone rather than flush with its very edge, and never
-    /// smaller than one row's worth of cards even if the zone itself is
-    /// tighter than that — a person still needs somewhere to read the hint
-    /// and click a card.
-    private func clampedFrame(covering freeRect: CGRect, itemCount: Int) -> CGRect {
-        let inset: CGFloat = 6
-        let minimum = SnapAssistSupport.contentSize(count: max(1, itemCount),
-                                                     columns: 1,
-                                                     itemSize: Self.itemSize,
-                                                     spacing: Self.spacing,
-                                                     padding: Self.padding)
-        let width = max(minimum.width, freeRect.width - inset * 2)
-        let height = max(minimum.height + 28 /* hint footer */, freeRect.height - inset * 2)
-        return CGRect(x: freeRect.midX - width / 2,
-                     y: freeRect.midY - height / 2,
-                     width: width,
-                     height: height).integral
+    /// The panel's frame for `itemCount` items covering `freeRect`, and the
+    /// fixed column count it was sized for: `columnCount` first picks how
+    /// many columns fit `freeRect` (intersected with `visibleFrame`, so a
+    /// free zone that pokes past a screen edge — a stale read mid
+    /// reconfiguration — never grows the panel past it), `contentSize` then
+    /// says how big that grid actually is, and the panel is inset a little
+    /// so it reads as covering the zone rather than flush with its very
+    /// edge. Never bigger than the zone it covers, never smaller than one
+    /// row, and always finally clamped inside `visibleFrame` itself — the
+    /// same size math the view's grid uses, so the two can never disagree
+    /// (unlike an earlier version of this method, which sized the panel by
+    /// a single always-one-column estimate while the view laid out an
+    /// unrelated adaptive grid of its own).
+    private func layout(itemCount: Int, freeRect: CGRect, visibleFrame: CGRect) -> (frame: CGRect, columns: Int) {
+        let bounds = freeRect.intersection(visibleFrame)
+        let usableBounds = bounds.isNull || bounds.isEmpty ? freeRect : bounds
+        let availableWidth = max(Self.itemSize.width, usableBounds.width - Self.outerInset * 2)
+        let columns = SnapAssistSupport.columnCount(count: itemCount,
+                                                    boundsWidth: availableWidth,
+                                                    itemWidth: Self.itemSize.width,
+                                                    spacing: Self.spacing,
+                                                    maxColumns: Self.maxColumns)
+        let content = SnapAssistSupport.contentSize(count: itemCount,
+                                                    columns: columns,
+                                                    itemSize: Self.itemSize,
+                                                    spacing: Self.spacing,
+                                                    padding: Self.padding)
+        let maxHeight = max(Self.itemSize.height + Self.padding * 2 + Self.footerHeight,
+                            usableBounds.height - Self.outerInset * 2)
+        let width = min(max(content.width, Self.itemSize.width + Self.padding * 2), availableWidth)
+        let height = min(content.height + Self.footerHeight, maxHeight)
+        var frame = CGRect(x: usableBounds.midX - width / 2,
+                           y: usableBounds.midY - height / 2,
+                           width: width,
+                           height: height)
+        // A last clamp inside the screen's own visible frame: `usableBounds`
+        // already sits inside it, but a panel wider or taller than the zone
+        // (the one-row/one-column minimum above) can still poke past the
+        // screen at its very edge.
+        frame.origin.x = min(max(frame.origin.x, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - frame.width))
+        frame.origin.y = min(max(frame.origin.y, visibleFrame.minY), max(visibleFrame.minY, visibleFrame.maxY - frame.height))
+        return (frame.integral, columns)
     }
 
     private func ensurePanel() -> KeyableSnapAssistPanel {
@@ -191,7 +238,22 @@ final class SnapAssistPanel {
                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.bundleIdentifier != Bundle.main.bundleIdentifier
             else { return }
+            if self.suppressNextActivationDismiss {
+                self.suppressNextActivationDismiss = false
+                return
+            }
             self.hide()
+        }
+        // A display reconfiguration (unplugged, resolution change, a
+        // reshuffled arrangement) can move or invalidate the very screen
+        // the free zone was computed against — the overlay would otherwise
+        // sit over stale geometry, or over nothing at all.
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.hide()
         }
     }
 
@@ -208,5 +270,7 @@ final class SnapAssistPanel {
         outsideClickMonitor = nil
         if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
         activationObserver = nil
+        if let screenParametersObserver { NotificationCenter.default.removeObserver(screenParametersObserver) }
+        screenParametersObserver = nil
     }
 }

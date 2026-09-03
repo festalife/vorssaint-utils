@@ -86,16 +86,22 @@ struct WindowLayoutSettings: View {
                     Text(text.snapFillsFreeSpaceCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    // No onChange/syncWithPreferences call either: Snap Assist
-                    // never starts or stops a tap of its own, it only decides
-                    // whether the next successful placement opens a panel.
-                    Toggle(text.snapAssistEnable, isOn: $snapAssistEnabled)
-                    Text(text.snapAssistCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if snapAssistEnabled, !permissions.screenRecording {
-                        PermissionRow(kind: .screenRecording)
-                    }
+                }
+                // Not nested under edge snapping: Snap Assist opens after
+                // *any* successful partial-zone placement (shortcut, a
+                // directional gesture or edge snap all reach the same hook
+                // in `applyPlacement`), not only ones dragged in through the
+                // edge-snap tap, so its toggle has to stay visible even with
+                // edge snapping off. No onChange/syncWithPreferences call
+                // either: Snap Assist never starts or stops a tap of its
+                // own, it only decides whether the next successful
+                // placement opens a panel.
+                Toggle(text.snapAssistEnable, isOn: $snapAssistEnabled)
+                Text(text.snapAssistCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if snapAssistEnabled, !permissions.screenRecording {
+                    PermissionRow(kind: .screenRecording)
                 }
                 Divider()
                 Toggle(text.gestureEnable, isOn: $gestureEnabled)

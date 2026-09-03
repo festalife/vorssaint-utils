@@ -13,14 +13,23 @@ struct SnapAssistPanelView: View {
     @ObservedObject var state: SnapAssistPanelState
     @Environment(\.colorScheme) private var colorScheme
 
+    /// A fixed column count, not an adaptive grid: `SnapAssistPanel.layout`
+    /// already picked this exact number when it sized the panel's own
+    /// frame with `SnapAssistSupport.columnCount`/`contentSize`, so the grid
+    /// drawn here has to use the same number rather than re-deriving its
+    /// own from the frame it happens to land in — otherwise the two can
+    /// disagree (an adaptive grid fitting one more column than the panel
+    /// was sized for reflows into a taller, clipped layout instead of the
+    /// one the frame math already accounted for).
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.fixed(SnapAssistPanel.itemSize.width), spacing: SnapAssistPanel.spacing),
+             count: max(1, state.columns))
+    }
+
     var body: some View {
         VStack(spacing: 10) {
             ScrollView {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: SnapAssistPanel.itemSize.width),
-                                       spacing: SnapAssistPanel.spacing)],
-                    spacing: SnapAssistPanel.spacing
-                ) {
+                LazyVGrid(columns: columns, spacing: SnapAssistPanel.spacing) {
                     ForEach(state.items) { item in
                         SnapAssistCardView(item: item,
                                           preview: item.previewWindowID.flatMap { state.previews[$0] }) {

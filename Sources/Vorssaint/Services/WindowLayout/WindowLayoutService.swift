@@ -805,43 +805,61 @@ final class WindowLayoutService: ObservableObject {
 
     /// Opens Snap Assist for the one free cell left after `action` just
     /// placed `windowID` successfully, if any — or closes an already open
-    /// overlay if there is nothing left to offer. Any previous overlay is
-    /// closed first regardless: a fresh placement always supersedes it,
-    /// whether or not a new one takes its place.
+    /// overlay along every path that has nothing left to offer. Unlike an
+    /// earlier version of this method, there is no unconditional "close
+    /// first" at the top: `SnapAssistPanel.show` already repositions and
+    /// re-fills an already-visible panel in place, so calling it directly
+    /// on the "advance to the next cell" path (this same method, re-entered
+    /// from `applyPlacement`'s success hook after a Snap Assist pick) never
+    /// flickers a hide-then-fade-back-in.
     private func showSnapAssistIfNeeded(action: WindowLayoutAction,
                                         windowID: CGWindowID,
                                         visibleFrame: NSRect,
                                         fallbackFrame: WindowLayoutFrame) {
-        hideSnapAssist()
         guard snapAssistEnabled,
               SnapGroupSupport.joinsGroup(action),
               let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
-        else { return }
+        else { hideSnapAssist(); return }
 
         let group = prunedGroup(snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID), on: screen)
         let occupied = Set(group.members.map(\.action))
         let cells = SnapAssistSupport.siblingZones(of: action)
-        guard let cell = SnapAssistSupport.nextFreeCell(in: cells, occupied: occupied) else { return }
+        guard let cell = SnapAssistSupport.nextFreeCell(in: cells, occupied: occupied) else {
+            hideSnapAssist()
+            return
+        }
 
         var excluded = Set(group.members.map(\.windowID))
         excluded.insert(windowID)
         let candidateIDs = SnapAssistSupport.candidates(mru: WindowUseTracker.shared.windows, excluding: excluded)
-        guard !candidateIDs.isEmpty else { return }
+        guard !candidateIDs.isEmpty else { hideSnapAssist(); return }
 
         let allItems = WindowEnumerator.enumerateSwitcherWindows(groupByApp: false,
                                                                   preservingGroupedWindows: false,
                                                                   snapshot: WindowEnumerator.snapshot())
         var itemsByWindowID: [CGWindowID: SwitcherItem] = [:]
         for item in allItems {
-            guard let id = item.windowID else { continue }
+            // A window on another Space, or one that does not currently
+            // overlap this screen at all (a second display), is never worth
+            // offering: picking it would place it into a zone it cannot
+            // usefully reach, or one the person cannot even see right now.
+            // `item.frame` is window-server/AX global space (top-left
+            // origin), so it is converted through the same AX↔AppKit
+            // bridge every placement already uses before comparing it
+            // against `screen.frame`, which is AppKit space.
+            guard let id = item.windowID, !item.isOnHiddenSpace else { continue }
+            let itemAppKitFrame = appKitFrame(fromAX: WindowLayoutFrame(origin: item.frame.origin,
+                                                                        size: item.frame.size))
+            guard screen.frame.intersects(itemAppKitFrame) else { continue }
             itemsByWindowID[id] = item
         }
         // `candidateIDs` is already MRU-ordered; a window absent from
-        // `itemsByWindowID` closed between being recorded and now, or was
-        // filtered out upstream (e.g. hidden by a Switcher rule) and is
-        // simply skipped rather than shown as a broken card.
+        // `itemsByWindowID` closed between being recorded and now, was
+        // filtered out just above, or was filtered out upstream (e.g.
+        // hidden by a Switcher rule) — simply skipped rather than shown as
+        // a broken card.
         let items = candidateIDs.compactMap { itemsByWindowID[$0] }
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty else { hideSnapAssist(); return }
 
         let theoreticalZone = WindowLayoutGeometry.rect(for: cell,
                                                         current: visibleFrame,
@@ -853,6 +871,10 @@ final class WindowLayoutService: ObservableObject {
                                          visibleFrame: visibleFrame,
                                          fallbackFrame: fallbackFrame,
                                          excluding: nil)
+        // Spec §9: a sliver of free space is not worth an overlay — the
+        // same bailout `SnapGroupSupport.freeSpace` already applies to an
+        // oversized minimum window.
+        guard SnapAssistSupport.isOfferable(freeRect: freeRect) else { hideSnapAssist(); return }
         presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen)
     }
 
@@ -866,7 +888,7 @@ final class WindowLayoutService: ObservableObject {
             return created
         }()
         let text = FeatureStrings.windowLayout(L10n.shared.language)
-        panel.show(in: freeRect, items: items, hint: text.snapAssistHint) { [weak self] item in
+        panel.show(in: freeRect, on: screen, items: items, hint: text.snapAssistHint) { [weak self] item in
             self?.selectSnapAssistCandidate(item, cell: cell, screen: screen)
         }
         WindowPreviewProvider.shared.refreshPreviews(for: items) { [weak panel] windowID, image in
@@ -878,21 +900,28 @@ final class WindowLayoutService: ObservableObject {
         snapAssistPanel?.hide()
     }
 
-    /// A Snap Assist card was clicked: unminimizes the chosen window if
-    /// needed, places it into `cell` through the exact same
-    /// `applyPlacement` path every other placement uses — so it joins the
-    /// Snap Group and free space is recomputed — then brings it to the
-    /// front. `applyPlacement`'s own success hook fires again from inside
-    /// this call, which is what offers the next free cell in the same
-    /// layout without any extra bookkeeping here.
+    /// A Snap Assist card was clicked: unminimizes the chosen window and
+    /// activates it first — mirroring `WindowActivator`'s own order of
+    /// bringing a window forward before anything else touches it — then
+    /// places it into `cell` through the exact same `applyPlacement` path
+    /// every other placement uses, so it joins the Snap Group and free
+    /// space is recomputed. `applyPlacement`'s own success hook fires again
+    /// from inside this call, which is what offers the next free cell in
+    /// the same layout without any extra bookkeeping here.
+    ///
+    /// On failure, nothing here hides the overlay or reverts the
+    /// un-minimize: the window is left exactly as brought forward, and the
+    /// same cell keeps showing (or, if closed already, is re-opened by the
+    /// next placement) so the person can try a different window instead of
+    /// losing the whole overlay to one failed pick.
     private func selectSnapAssistCandidate(_ item: SwitcherItem, cell: WindowLayoutAction, screen: NSScreen) {
         guard let windowID = item.windowID else { return }
         if item.isMinimized {
             _ = WindowActivator.setWindowMinimized(false, windowID: windowID, pid: item.windowOwnerPID)
         }
-        let result = applySnapAssistPlacement(cell, windowID: windowID, pid: item.windowOwnerPID, screen: screen)
-        guard case .success = result else { return }
+        snapAssistPanel?.ignoreNextAppActivation()
         WindowActivator.activate(item)
+        applySnapAssistPlacement(cell, windowID: windowID, pid: item.windowOwnerPID, screen: screen)
     }
 
     /// Places an arbitrary window — not necessarily the focused one, unlike

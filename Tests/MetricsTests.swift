@@ -6406,6 +6406,32 @@ struct MetricsTests {
                },
                "every action that never joins a group also has no sibling zones to offer")
 
+        // End-to-end: siblingZones feeds directly into nextFreeCell, the
+        // way `showSnapAssistIfNeeded` actually chains them, walking a full
+        // quarters layout from the first placement to the last free cell.
+        let saQuarterCells = SnapAssistSupport.siblingZones(of: .topLeft)
+        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells, occupied: []) == .topRight,
+               "fresh from topLeft, the first sibling in reading order is offered")
+        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells, occupied: [.topRight]) == .bottomLeft,
+               "once topRight is also taken, bottomLeft is offered next")
+        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells, occupied: [.topRight, .bottomLeft]) == .bottomRight,
+               "with three of four quarters taken, the last one is offered")
+        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells,
+                                              occupied: [.topRight, .bottomLeft, .bottomRight]) == nil,
+               "once every sibling of topLeft is occupied, nothing more is offered")
+        expect(SnapAssistSupport.nextFreeCell(in: SnapAssistSupport.siblingZones(of: .leftHalf),
+                                              occupied: [.rightHalf]) == nil,
+               "a half's one sibling already taken leaves nothing left to offer")
+
+        expect(SnapAssistSupport.isOfferable(freeRect: CGRect(x: 0, y: 0, width: 400, height: 300)),
+               "a roomy free rect is worth an overlay")
+        expect(SnapAssistSupport.isOfferable(freeRect: CGRect(x: 0, y: 0, width: 200, height: 200)),
+               "exactly the minimum on both axes still counts as offerable")
+        expect(!SnapAssistSupport.isOfferable(freeRect: CGRect(x: 0, y: 0, width: 199, height: 300)),
+               "a sliver narrower than the minimum is not worth an overlay")
+        expect(!SnapAssistSupport.isOfferable(freeRect: CGRect(x: 0, y: 0, width: 400, height: 150)),
+               "a sliver shorter than the minimum is not worth an overlay either")
+
         let saCells: [WindowLayoutAction] = [.topRight, .bottomLeft, .bottomRight]
         expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: []) == .topRight,
                "with nothing occupied yet, the first cell in reading order is offered")

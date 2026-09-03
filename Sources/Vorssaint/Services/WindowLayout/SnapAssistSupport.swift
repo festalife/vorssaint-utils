@@ -10,6 +10,19 @@ import CoreGraphics
 /// caller that touches Accessibility or a panel, so every decision below is
 /// exercised directly by `build.sh --test`.
 enum SnapAssistSupport {
+    /// Below this size per axis, spec §9's rule for an oversized minimum
+    /// window applies just as much here: a free zone this small is not
+    /// worth covering with an overlay at all — nobody can usefully read a
+    /// thumbnail grid or land a click in it. Matches
+    /// `SnapGroupSupport.minimumSpace`, the same threshold free space
+    /// itself already falls back under.
+    static let minimumOfferableSpace: CGFloat = 200
+
+    /// Whether `freeRect` is worth opening Snap Assist over at all.
+    static func isOfferable(freeRect: CGRect) -> Bool {
+        freeRect.width >= minimumOfferableSpace && freeRect.height >= minimumOfferableSpace
+    }
+
     /// The other zones in the same layout `action` belongs to — what
     /// Windows leaves for Snap Assist to offer (spec §4/§5's examples):
     /// a half's other half, a third's other two thirds *as two separate
