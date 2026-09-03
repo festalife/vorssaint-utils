@@ -70,6 +70,12 @@ final class WindowLayoutService: ObservableObject {
     /// first triggered it (see `resolvedEdgeSnapTarget`). Cleared together
     /// with the panel everywhere it hides.
     private var snapLayoutsActiveScreen: WindowEdgeSnapScreen?
+    /// The Snap Assist overlay (spec §4), shown after any placement leaves
+    /// free space on screen. Unlike `snapLayoutsPanel`, it is genuinely
+    /// clickable and owns its own dismissal (Esc, click outside, another
+    /// drag starting elsewhere, an app switch, or eight seconds of
+    /// inactivity), so it is created lazily and otherwise left alone here.
+    private var snapAssistPanel: SnapAssistPanel?
     /// One Snap Group per physical display, in memory only — cleared on
     /// relaunch like the rest of this service's session state. Keyed by
     /// display id rather than `NSScreen` identity, which AppKit is free to
@@ -134,6 +140,7 @@ final class WindowLayoutService: ObservableObject {
         unregisterDirectionalHotkey()
         stopGestureTap()
         stopEdgeSnapTap()
+        hideSnapAssist()
         for timer in settleTimers.values { timer.invalidate() }
         settleTimers.removeAll()
         let suspensions = assistiveModeSuspensions.values
@@ -320,6 +327,18 @@ final class WindowLayoutService: ObservableObject {
                             appliedRect: placement.rect,
                             visibleFrame: visibleFrame,
                             fallbackFrame: target.frame)
+            // Every placement path funnels through here (shortcut, edge
+            // snap, a directional gesture, the Snap Layouts panel, and a
+            // Snap Assist pick itself), so this is the one place a real,
+            // successful partial-zone placement is known to have happened —
+            // exactly the signal spec §4 wants (never for maximize,
+            // restore, full screen or center, none of which reach this
+            // branch: they are handled earlier in `apply(_:)` and never
+            // call `applyPlacement`).
+            showSnapAssistIfNeeded(action: effectiveAction,
+                                   windowID: target.windowID,
+                                   visibleFrame: visibleFrame,
+                                   fallbackFrame: target.frame)
             return finish(.success(restored: false))
         }
         frameHistory.discardLatest(for: target.key)
@@ -771,6 +790,154 @@ final class WindowLayoutService: ObservableObject {
 
     private func axElement(windowID: CGWindowID, in axApp: AXUIElement) -> AXUIElement? {
         windowsAttribute(axApp)?.first { AXWindowResolver.windowID(for: $0) == windowID }
+    }
+
+    // MARK: - Snap Assist (spec §4)
+
+    /// Whether Snap Assist should react at all: the feature toggle, plus the
+    /// same Accessibility/session gates every other Window Layout surface
+    /// checks before touching AX or opening a panel.
+    private var snapAssistEnabled: Bool {
+        AppFeature.windowLayout.isAvailable
+            && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapAssistEnabled)
+            && AXIsProcessTrusted()
+    }
+
+    /// Opens Snap Assist for the one free cell left after `action` just
+    /// placed `windowID` successfully, if any — or closes an already open
+    /// overlay if there is nothing left to offer. Any previous overlay is
+    /// closed first regardless: a fresh placement always supersedes it,
+    /// whether or not a new one takes its place.
+    private func showSnapAssistIfNeeded(action: WindowLayoutAction,
+                                        windowID: CGWindowID,
+                                        visibleFrame: NSRect,
+                                        fallbackFrame: WindowLayoutFrame) {
+        hideSnapAssist()
+        guard snapAssistEnabled,
+              SnapGroupSupport.joinsGroup(action),
+              let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
+        else { return }
+
+        let group = prunedGroup(snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID), on: screen)
+        let occupied = Set(group.members.map(\.action))
+        let cells = SnapAssistSupport.siblingZones(of: action)
+        guard let cell = SnapAssistSupport.nextFreeCell(in: cells, occupied: occupied) else { return }
+
+        var excluded = Set(group.members.map(\.windowID))
+        excluded.insert(windowID)
+        let candidateIDs = SnapAssistSupport.candidates(mru: WindowUseTracker.shared.windows, excluding: excluded)
+        guard !candidateIDs.isEmpty else { return }
+
+        let allItems = WindowEnumerator.enumerateSwitcherWindows(groupByApp: false,
+                                                                  preservingGroupedWindows: false,
+                                                                  snapshot: WindowEnumerator.snapshot())
+        var itemsByWindowID: [CGWindowID: SwitcherItem] = [:]
+        for item in allItems {
+            guard let id = item.windowID else { continue }
+            itemsByWindowID[id] = item
+        }
+        // `candidateIDs` is already MRU-ordered; a window absent from
+        // `itemsByWindowID` closed between being recorded and now, or was
+        // filtered out upstream (e.g. hidden by a Switcher rule) and is
+        // simply skipped rather than shown as a broken card.
+        let items = candidateIDs.compactMap { itemsByWindowID[$0] }
+        guard !items.isEmpty else { return }
+
+        let theoreticalZone = WindowLayoutGeometry.rect(for: cell,
+                                                        current: visibleFrame,
+                                                        visibleFrame: visibleFrame,
+                                                        windowGap: WindowLayoutGaps.windowGap,
+                                                        screenGap: WindowLayoutGaps.screenGap)
+        let freeRect = freeSpaceAdjusted(for: cell,
+                                         theoreticalZone: theoreticalZone,
+                                         visibleFrame: visibleFrame,
+                                         fallbackFrame: fallbackFrame,
+                                         excluding: nil)
+        presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen)
+    }
+
+    private func presentSnapAssist(cell: WindowLayoutAction,
+                                   freeRect: CGRect,
+                                   items: [SwitcherItem],
+                                   screen: NSScreen) {
+        let panel = snapAssistPanel ?? {
+            let created = SnapAssistPanel()
+            snapAssistPanel = created
+            return created
+        }()
+        let text = FeatureStrings.windowLayout(L10n.shared.language)
+        panel.show(in: freeRect, items: items, hint: text.snapAssistHint) { [weak self] item in
+            self?.selectSnapAssistCandidate(item, cell: cell, screen: screen)
+        }
+        WindowPreviewProvider.shared.refreshPreviews(for: items) { [weak panel] windowID, image in
+            panel?.updatePreview(image, for: windowID)
+        }
+    }
+
+    private func hideSnapAssist() {
+        snapAssistPanel?.hide()
+    }
+
+    /// A Snap Assist card was clicked: unminimizes the chosen window if
+    /// needed, places it into `cell` through the exact same
+    /// `applyPlacement` path every other placement uses — so it joins the
+    /// Snap Group and free space is recomputed — then brings it to the
+    /// front. `applyPlacement`'s own success hook fires again from inside
+    /// this call, which is what offers the next free cell in the same
+    /// layout without any extra bookkeeping here.
+    private func selectSnapAssistCandidate(_ item: SwitcherItem, cell: WindowLayoutAction, screen: NSScreen) {
+        guard let windowID = item.windowID else { return }
+        if item.isMinimized {
+            _ = WindowActivator.setWindowMinimized(false, windowID: windowID, pid: item.windowOwnerPID)
+        }
+        let result = applySnapAssistPlacement(cell, windowID: windowID, pid: item.windowOwnerPID, screen: screen)
+        guard case .success = result else { return }
+        WindowActivator.activate(item)
+    }
+
+    /// Places an arbitrary window — not necessarily the focused one, unlike
+    /// every other entry point in this file — into `action`'s zone on
+    /// `screen`. Snap Assist is the only caller: its candidates come from
+    /// the Switcher/Dock Preview machinery, which already knows about
+    /// windows this service's own `focusedTarget(for:)` walk never looks at
+    /// (a minimized window, or one behind the frontmost app).
+    @discardableResult
+    private func applySnapAssistPlacement(_ action: WindowLayoutAction,
+                                          windowID: CGWindowID,
+                                          pid: pid_t,
+                                          screen: NSScreen) -> WindowLayoutResult {
+        guard AXIsProcessTrusted() else { return finish(.failure(.missingAccessibility)) }
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 0.35)
+        guard let window = axElement(windowID: windowID, in: axApp) else {
+            return finish(.failure(.noWindow))
+        }
+        // `target(from:)` requires every candidate window id to already
+        // appear "on screen", which a window just brought back from
+        // minimized has not necessarily reported yet. Every window this
+        // helper is ever asked about came from a live enumeration a moment
+        // ago, so this pass allows the fuller `.optionAll` set instead of
+        // gating on `.optionOnScreenOnly`.
+        guard let allWindowIDs = allWindowIDs(),
+              let app = NSRunningApplication(processIdentifier: pid),
+              let target = target(from: window,
+                                  app: app,
+                                  onScreenWindowIDs: allWindowIDs,
+                                  capability: action.targetCapability)
+        else {
+            return finish(.failure(.noWindow))
+        }
+        pruneWindowState(keeping: target.key)
+        return applyPlacement(action, to: target, visibleFrame: screen.visibleFrame)
+    }
+
+    private func allWindowIDs() -> Set<CGWindowID>? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements],
+                                                       kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        return Set(windows.compactMap {
+            ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        })
     }
 
     private func setFrame(_ frame: WindowLayoutFrame,

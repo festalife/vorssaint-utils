@@ -6378,6 +6378,82 @@ struct MetricsTests {
                "a leftHalf neighbour grown to 700pt still falls short of a rightThird zone's own left edge " +
                "(the untouched centerThird sits between them), so the rightThird request is left unadjusted")
 
+        // MARK: Snap Assist
+
+        expect(SnapAssistSupport.siblingZones(of: .leftHalf) == [.rightHalf],
+               "a half's only sibling is the other half")
+        expect(SnapAssistSupport.siblingZones(of: .rightHalf) == [.leftHalf],
+               "halves are symmetric")
+        expect(SnapAssistSupport.siblingZones(of: .topHalf) == [.bottomHalf]
+               && SnapAssistSupport.siblingZones(of: .bottomHalf) == [.topHalf],
+               "top/bottom halves are their own sibling family, separate from left/right")
+        expect(SnapAssistSupport.siblingZones(of: .leftThird) == [.centerThird, .rightThird],
+               "a third's siblings are the other two thirds as two separate cells")
+        expect(SnapAssistSupport.siblingZones(of: .centerThird) == [.leftThird, .rightThird],
+               "the center third's siblings are the two outer thirds")
+        expect(SnapAssistSupport.siblingZones(of: .leftTwoThirds) == [.rightThird],
+               "a two-thirds zone's only sibling is the remaining third")
+        expect(SnapAssistSupport.siblingZones(of: .rightTwoThirds) == [.leftThird],
+               "the mirrored two-thirds zone leaves the opposite third")
+        expect(SnapAssistSupport.siblingZones(of: .topLeft) == [.topRight, .bottomLeft, .bottomRight],
+               "a quarter's siblings are the other three quarters")
+        expect(Set(SnapAssistSupport.siblingZones(of: .topLeftSixth)) ==
+               Set<WindowLayoutAction>([.topCenterSixth, .topRightSixth, .bottomLeftSixth,
+                                        .bottomCenterSixth, .bottomRightSixth]),
+               "a sixth's siblings are the other five sixths")
+        expect(WindowLayoutAction.allCases.allSatisfy { action in
+                   SnapGroupSupport.joinsGroup(action) || SnapAssistSupport.siblingZones(of: action).isEmpty
+               },
+               "every action that never joins a group also has no sibling zones to offer")
+
+        let saCells: [WindowLayoutAction] = [.topRight, .bottomLeft, .bottomRight]
+        expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: []) == .topRight,
+               "with nothing occupied yet, the first cell in reading order is offered")
+        expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: [.topRight]) == .bottomLeft,
+               "once a cell is filled, the next one in order is offered")
+        expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: [.topRight, .bottomLeft, .bottomRight]) == nil,
+               "once every cell is filled, none remain to offer")
+        expect(SnapAssistSupport.nextFreeCell(in: [], occupied: []) == nil,
+               "an action with no siblings never offers a cell")
+
+        expect(SnapAssistSupport.candidates(mru: [3, 1, 2], excluding: [1]) == [3, 2],
+               "MRU order is kept, minus every excluded window")
+        expect(SnapAssistSupport.candidates(mru: [1, 2], excluding: [1, 2]).isEmpty,
+               "excluding every open window leaves nothing to offer")
+        expect(SnapAssistSupport.candidates(mru: [], excluding: []).isEmpty,
+               "no open windows means no candidates, regardless of exclusions")
+
+        expect(SnapAssistSupport.columnCount(count: 6, boundsWidth: 500, itemWidth: 116, spacing: 10, maxColumns: 5) == 4,
+               "columns are limited by how many items fit the available width")
+        expect(SnapAssistSupport.columnCount(count: 2, boundsWidth: 2000, itemWidth: 116, spacing: 10, maxColumns: 5) == 2,
+               "columns never exceed the item count, even with plenty of room")
+        expect(SnapAssistSupport.columnCount(count: 20, boundsWidth: 2000, itemWidth: 116, spacing: 10, maxColumns: 5) == 5,
+               "columns are capped at maxColumns even with room for more")
+        expect(SnapAssistSupport.columnCount(count: 0, boundsWidth: 500, itemWidth: 116, spacing: 10, maxColumns: 5) == 1,
+               "zero items still returns a safe minimum of one column")
+
+        let saCellFrames = SnapAssistSupport.cellFrames(count: 5, columns: 2,
+                                                        itemSize: CGSize(width: 100, height: 80),
+                                                        spacing: 10, padding: 16)
+        expect(saCellFrames.count == 5, "one frame per item")
+        expect(saCellFrames[0] == CGRect(x: 16, y: 16, width: 100, height: 80),
+               "the first cell sits at the padded origin")
+        expect(saCellFrames[1] == CGRect(x: 126, y: 16, width: 100, height: 80),
+               "the second cell in the same row sits one item-plus-spacing to the right")
+        expect(saCellFrames[2] == CGRect(x: 16, y: 106, width: 100, height: 80),
+               "the third cell wraps to a new row at the padded left edge")
+        expect(saCellFrames[4] == CGRect(x: 16, y: 196, width: 100, height: 80),
+               "a trailing partial row still lays out left to right")
+
+        let saContentSize = SnapAssistSupport.contentSize(count: 5, columns: 2,
+                                                          itemSize: CGSize(width: 100, height: 80),
+                                                          spacing: 10, padding: 16)
+        expect(saContentSize == CGSize(width: 242, height: 292),
+               "content size covers every row and column plus padding, with three rows for five items in two columns")
+        expect(SnapAssistSupport.contentSize(count: 0, columns: 2, itemSize: CGSize(width: 100, height: 80),
+                                             spacing: 10, padding: 16) == .zero,
+               "no items means no content size")
+
         // MARK: Window move and resize gestures
 
         expect(WindowGestureSupport.modifiers(from: nil) == [.control, .command],

@@ -14,6 +14,7 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
     @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
     @AppStorage(DefaultsKey.windowSnapFillsFreeSpace) private var snapFillsFreeSpace = true
+    @AppStorage(DefaultsKey.windowSnapAssistEnabled) private var snapAssistEnabled = true
     @AppStorage(DefaultsKey.windowGestureEnabled) private var gestureEnabled = false
     @AppStorage(DefaultsKey.windowGestureModifiers) private var gestureModifiers = WindowGestureSupport.defaultModifierStorageValue
     @AppStorage(DefaultsKey.windowGestureRaiseWindow) private var gestureRaiseWindow = false
@@ -85,6 +86,16 @@ struct WindowLayoutSettings: View {
                     Text(text.snapFillsFreeSpaceCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    // No onChange/syncWithPreferences call either: Snap Assist
+                    // never starts or stops a tap of its own, it only decides
+                    // whether the next successful placement opens a panel.
+                    Toggle(text.snapAssistEnable, isOn: $snapAssistEnabled)
+                    Text(text.snapAssistCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if snapAssistEnabled, !permissions.screenRecording {
+                        PermissionRow(kind: .screenRecording)
+                    }
                 }
                 Divider()
                 Toggle(text.gestureEnable, isOn: $gestureEnabled)

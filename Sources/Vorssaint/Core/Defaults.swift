@@ -585,6 +585,7 @@ enum DefaultsKey {
     static let windowEdgeSnapEnabled = "windowEdgeSnapEnabled"
     static let windowSnapLayoutsEnabled = "windowSnapLayoutsEnabled"
     static let windowSnapFillsFreeSpace = "windowSnapFillsFreeSpace"
+    static let windowSnapAssistEnabled = "windowSnapAssistEnabled"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1306,6 +1307,10 @@ enum Defaults {
         // once a real Snap Group already exists, so it never surfaces new
         // behavior on its own.
         DefaultsKey.windowSnapFillsFreeSpace: true,
+        // On by default for the same reason as the two toggles above: Snap
+        // Assist only ever appears once a placement leaves real free space
+        // on screen, so it never surfaces anything on its own.
+        DefaultsKey.windowSnapAssistEnabled: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,
