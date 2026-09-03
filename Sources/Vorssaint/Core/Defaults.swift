@@ -334,15 +334,23 @@ enum DefaultsKey {
     // session is actually running.
     static let fanControlManualDuration = "fanControlManualDuration"
     // Machine-only. The absolute deadline (seconds since 1970) of the manual
-    // session in progress, or absent when none is running. Persisted so the
-    // panel can show a remaining-time label before the first XPC round trip
-    // completes and across an app restart; the helper enforces the deadline
-    // on its own regardless of whether this key exists.
+    // session in progress, or absent when none is running. The helper enforces
+    // the deadline on its own; this key only lets the app notice, on launch,
+    // a deadline that already elapsed while it was not running, and gate
+    // resumePreviousCurveAfterManualExpiry so it only reaches for the other
+    // two keys below during a real, live-tracked expiry.
     static let fanControlManualUntil = "fanControlManualUntil"
     // Machine-only. Which mode (system or curve) a timed manual override
     // should hand control back to once it expires; set once when the
-    // override begins, cleared together with fanControlManualUntil.
+    // override is confirmed active, cleared together with fanControlManualUntil.
     static let fanControlModeBeforeManual = "fanControlModeBeforeManual"
+    // Machine-only. The curve configuration that was actually applied and
+    // running right before a timed manual override began, encoded the same
+    // way as fanControlCurves. Captured separately because the curve editor
+    // writes fanControlCurves live as the user drags points, without an
+    // Apply step, so it can no longer be trusted to describe what the
+    // hardware was actually running by the time the override expires.
+    static let fanControlManualPreviousCurves = "fanControlManualPreviousCurves"
     // Previous panel visibility key, read once by the migration below.
     static let monitorShowFanControlBeta = "monitorShowFanControlBeta"
     // Machine-only recovery state. A true value means the helper must confirm
