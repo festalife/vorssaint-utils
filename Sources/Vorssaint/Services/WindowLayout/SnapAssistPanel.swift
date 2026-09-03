@@ -58,12 +58,19 @@ final class SnapAssistPanel {
     private var screenParametersObserver: NSObjectProtocol?
     private var dismissTimer: Timer?
     /// Set right before `WindowLayoutService` activates a candidate's app
-    /// itself, so the very `didActivateApplicationNotification` that
-    /// activation posts is not mistaken for the person switching away —
+    /// itself, so the `didActivateApplicationNotification`(s) that
+    /// activation posts are not mistaken for the person switching away —
     /// which would otherwise close the overlay (and defeat "try another
     /// window" on a failed placement, spec §4 point 4) the instant a pick
     /// is made, before the placement it triggered even has a result yet.
-    private var suppressNextActivationDismiss = false
+    /// A time window, not a one-shot flag: real-Mac testing found the very
+    /// first pick closing the overlay before its placement even ran, which
+    /// a single "ignore exactly the next notification" flag cannot protect
+    /// against if more than one activation-related notification arrives
+    /// (the app itself, then one of its windows, in either order) — every
+    /// notification inside the window is ignored instead.
+    private var suppressActivationDismissUntil: TimeInterval = 0
+    private static let activationSuppressionWindow: TimeInterval = 1.0
 
     /// Spec §4 point 4: eight seconds of inactivity closes the overlay and
     /// leaves the space free, the same as Esc or a click elsewhere.
@@ -122,11 +129,11 @@ final class SnapAssistPanel {
         state.previews[windowID] = image
     }
 
-    /// See `suppressNextActivationDismiss`'s doc comment. Called by
+    /// See `suppressActivationDismissUntil`'s doc comment. Called by
     /// `WindowLayoutService` immediately before it activates a chosen
     /// candidate's app.
     func ignoreNextAppActivation() {
-        suppressNextActivationDismiss = true
+        suppressActivationDismissUntil = ProcessInfo.processInfo.systemUptime + Self.activationSuppressionWindow
     }
 
     func hide() {
@@ -261,8 +268,7 @@ final class SnapAssistPanel {
                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.bundleIdentifier != Bundle.main.bundleIdentifier
             else { return }
-            if self.suppressNextActivationDismiss {
-                self.suppressNextActivationDismiss = false
+            if ProcessInfo.processInfo.systemUptime < self.suppressActivationDismissUntil {
                 return
             }
             self.hide()

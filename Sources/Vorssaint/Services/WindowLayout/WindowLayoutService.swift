@@ -910,27 +910,52 @@ final class WindowLayoutService: ObservableObject {
         snapAssistPanel?.hide()
     }
 
-    /// A Snap Assist card was clicked: unminimizes the chosen window and
-    /// activates it first — mirroring `WindowActivator`'s own order of
-    /// bringing a window forward before anything else touches it — then
-    /// places it into `cell` through the exact same `applyPlacement` path
-    /// every other placement uses, so it joins the Snap Group and free
-    /// space is recomputed. `applyPlacement`'s own success hook fires again
-    /// from inside this call, which is what offers the next free cell in
-    /// the same layout without any extra bookkeeping here.
+    /// Debug channel for Snap Assist placement failures, opted into with
+    /// `VORSSAINT_SNAP_ASSIST_DEBUG` set in the environment: a click that
+    /// reaches `selectSnapAssistCandidate` but never moves anything is
+    /// otherwise silent, since `applySnapAssistPlacement` fails closed on
+    /// purpose (spec §4's "try another window") rather than surfacing an
+    /// error anywhere in the UI. Off by default so this still-experimental
+    /// path stays quiet in the unified log for everyone else.
+    private static let snapAssistDebugLogging =
+        ProcessInfo.processInfo.environment["VORSSAINT_SNAP_ASSIST_DEBUG"] != nil
+    private static let snapAssistLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "vorssaint",
+                                              category: "snap-assist")
+
+    private func logSnapAssistFailure(_ reason: String,
+                                      windowID: CGWindowID,
+                                      pid: pid_t,
+                                      window: AXUIElement?) {
+        guard Self.snapAssistDebugLogging else { return }
+        var detail = reason
+        if let window {
+            detail += " role=\(role(of: window) ?? "nil")"
+            detail += " minimized=\(boolAttribute(window, kAXMinimizedAttribute as String))"
+            detail += " subrole=\(stringAttribute(window, kAXSubroleAttribute as String) ?? "nil")"
+            detail += " frame=\(String(describing: frame(of: window)))"
+            detail += " fullScreen=\(boolAttribute(window, "AXFullScreen"))"
+            detail += " canSetFrame=\(canSetFrame(on: window))"
+        } else {
+            detail += " (no AXUIElement resolved)"
+        }
+        Self.snapAssistLog.debug(
+            "Snap Assist placement failed: \(detail, privacy: .public) windowID=\(windowID) pid=\(pid)")
+    }
+
+    /// A Snap Assist card was clicked: places the chosen window into `cell`
+    /// through the exact same `applyPlacement` path every other placement
+    /// uses, so it joins the Snap Group and free space is recomputed.
+    /// `applyPlacement`'s own success hook fires again from inside this
+    /// call, which is what offers the next free cell in the same layout
+    /// without any extra bookkeeping here.
     ///
-    /// On failure, nothing here hides the overlay or reverts the
-    /// un-minimize: the window is left exactly as brought forward, and the
-    /// same cell keeps showing (or, if closed already, is re-opened by the
-    /// next placement) so the person can try a different window instead of
-    /// losing the whole overlay to one failed pick.
+    /// On failure, nothing here hides the overlay: the same cell keeps
+    /// showing (or, if closed already, is re-opened by the next placement)
+    /// so the person can try a different window instead of losing the
+    /// whole overlay to one failed pick.
     private func selectSnapAssistCandidate(_ item: SwitcherItem, cell: WindowLayoutAction, screen: NSScreen) {
         guard let windowID = item.windowID else { return }
-        if item.isMinimized {
-            _ = WindowActivator.setWindowMinimized(false, windowID: windowID, pid: item.windowOwnerPID)
-        }
         snapAssistPanel?.ignoreNextAppActivation()
-        WindowActivator.activate(item)
         applySnapAssistPlacement(cell, windowID: windowID, pid: item.windowOwnerPID, screen: screen)
     }
 
@@ -949,8 +974,10 @@ final class WindowLayoutService: ObservableObject {
         let axApp = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(axApp, 0.35)
         guard let window = axElement(windowID: windowID, in: axApp) else {
+            logSnapAssistFailure("no AXUIElement for windowID", windowID: windowID, pid: pid, window: nil)
             return finish(.failure(.noWindow))
         }
+        activateSnapAssistTarget(window: window, axApp: axApp, pid: pid)
         // `target(from:)` requires every candidate window id to already
         // appear "on screen", which a window just brought back from
         // minimized has not necessarily reported yet. Every window this
@@ -964,10 +991,45 @@ final class WindowLayoutService: ObservableObject {
                                   onScreenWindowIDs: allWindowIDs,
                                   capability: action.targetCapability)
         else {
+            logSnapAssistFailure("target(from:) rejected the window", windowID: windowID, pid: pid, window: window)
             return finish(.failure(.noWindow))
         }
         pruneWindowState(keeping: target.key)
         return applyPlacement(action, to: target, visibleFrame: screen.visibleFrame)
+    }
+
+    /// Un-minimizes and raises `window` directly through the AXUIElement
+    /// `applySnapAssistPlacement` already resolved — no second resolution
+    /// pass — and activates its owning app without going through
+    /// `WindowActivator.activate`, whose `ActivationHandoff.yield(to:)`
+    /// always calls `NSApp.activate(ignoringOtherApps: true)` before
+    /// yielding to the target. That dance exists for the Switcher/Dock
+    /// Preview case, where Vorssaint's own panel is genuinely key and
+    /// frontmost and the handoff has to hand real activation away cleanly;
+    /// Snap Assist's panel is deliberately never activating in the first
+    /// place (spec §4 must not steal focus), so routing through it anyway
+    /// briefly activated Vorssaint for no reason and, on a real Mac, left
+    /// the target app still mid activation-transition at the exact moment
+    /// `target(from:)` tried to read it — failing the placement silently.
+    /// A direct `app.activate(from:options:)`, the same call
+    /// `WindowActivator` itself falls through to, needs no such preamble:
+    /// it is documented to work regardless of which app is currently
+    /// active.
+    private func activateSnapAssistTarget(window: AXUIElement, axApp: AXUIElement, pid: pid_t) {
+        if boolAttribute(window, kAXMinimizedAttribute as String) {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return }
+        app.unhide()
+        AXUIElementSetAttributeValue(axApp, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(axApp, kAXMainWindowAttribute as CFString, window)
+        AXUIElementSetAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, window)
+        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        if !app.activate(from: NSRunningApplication.current, options: [.activateAllWindows]) {
+            app.activate(options: [.activateAllWindows])
+        }
     }
 
     private func allWindowIDs() -> Set<CGWindowID>? {
