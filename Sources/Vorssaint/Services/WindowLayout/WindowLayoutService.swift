@@ -69,6 +69,12 @@ final class WindowLayoutService: ObservableObject {
     /// first triggered it (see `resolvedEdgeSnapTarget`). Cleared together
     /// with the panel everywhere it hides.
     private var snapLayoutsActiveScreen: WindowEdgeSnapScreen?
+    /// One Snap Group per physical display, in memory only — cleared on
+    /// relaunch like the rest of this service's session state. Keyed by
+    /// display id rather than `NSScreen` identity, which AppKit is free to
+    /// invalidate on a reconfiguration (`AppKitExtensions.swift` explains
+    /// the same choice for `isStillAttached`).
+    private var snapGroups: [CGDirectDisplayID: SnapGroup] = [:]
     private var assistiveModeSuspensions: [CGWindowID: EnhancedUserInterfaceSuspension] = [:]
     private var settleTimers: [CGWindowID: Timer] = [:]
     private var gestureAssistiveMode: EnhancedUserInterfaceSuspension?
@@ -174,6 +180,7 @@ final class WindowLayoutService: ObservableObject {
             }
             if setFrame(previous, on: target.window, windowKey: target.key) {
                 lastActions.removeValue(forKey: target.key)
+                removeFromAllSnapGroups(target.windowID)
                 return finish(.success(restored: true))
             }
             frameHistory.record(previous, for: target.key)
@@ -204,6 +211,7 @@ final class WindowLayoutService: ObservableObject {
                 } else {
                     lastActions[target.key] = .fullScreen
                 }
+                removeFromAllSnapGroups(target.windowID)
             }
             return applied ? finish(.success(restored: false)) : finish(.failure(.failed))
         }
@@ -229,6 +237,7 @@ final class WindowLayoutService: ObservableObject {
                         on: target.window,
                         windowKey: target.key) {
                 lastActions[target.key] = action
+                removeFromAllSnapGroups(target.windowID)
                 return finish(.success(restored: false))
             }
             frameHistory.discardLatest(for: target.key)
@@ -239,7 +248,8 @@ final class WindowLayoutService: ObservableObject {
            accepted(actual: target.frame,
                     targetRect: placement(for: action,
                                           current: target.frame,
-                                          visibleFrame: screen.visibleFrame).rect,
+                                          visibleFrame: screen.visibleFrame,
+                                          excluding: target.windowID).rect,
                     action: action),
            let destination = sidewaysScreen(to: screen,
                                             screens: screens,
@@ -283,7 +293,8 @@ final class WindowLayoutService: ObservableObject {
                                                                    previousAction: previousAction)
         let placement = placement(for: effectiveAction,
                                   current: target.frame,
-                                  visibleFrame: visibleFrame)
+                                  visibleFrame: visibleFrame,
+                                  excluding: target.windowID)
         if placement.frame == target.frame {
             lastActions[target.key] = effectiveAction
             return finish(.success(restored: false))
@@ -296,6 +307,11 @@ final class WindowLayoutService: ObservableObject {
                     on: target.window,
                     windowKey: target.key) {
             lastActions[target.key] = effectiveAction
+            updateSnapGroup(action: effectiveAction,
+                            windowID: target.windowID,
+                            appliedRect: placement.rect,
+                            visibleFrame: visibleFrame,
+                            fallbackFrame: target.frame)
             return finish(.success(restored: false))
         }
         frameHistory.discardLatest(for: target.key)
@@ -430,16 +446,154 @@ final class WindowLayoutService: ObservableObject {
         return keys.isEmpty ? nil : keys
     }
 
+    /// `excluding` is the window this placement is *for*: when it already
+    /// belongs to the Snap Group being consulted (re-snapping a window that
+    /// was already a member), its own old zone must never shrink its own
+    /// new one.
     private func placement(for action: WindowLayoutAction,
                            current: WindowLayoutFrame,
-                           visibleFrame: NSRect) -> WindowLayoutPlacement {
+                           visibleFrame: NSRect,
+                           excluding windowID: CGWindowID? = nil) -> WindowLayoutPlacement {
         let rect = WindowLayoutGeometry.rect(for: action,
                                              current: appKitFrame(fromAX: current),
                                              visibleFrame: visibleFrame,
                                              windowGap: WindowLayoutGaps.windowGap,
                                              screenGap: WindowLayoutGaps.screenGap)
-        let integral = rect.integral
+        let adjusted = freeSpaceAdjusted(for: action,
+                                         theoreticalZone: rect,
+                                         visibleFrame: visibleFrame,
+                                         fallbackFrame: current,
+                                         excluding: windowID)
+        let integral = adjusted.integral
         return WindowLayoutPlacement(frame: axFrame(fromAppKit: integral), rect: integral)
+    }
+
+    /// Whether Window Layout should snap into the real space a resized
+    /// neighbour leaves, rather than always the fixed theoretical half/third/
+    /// corner. Off restores today's behavior exactly (spec §5 Windows
+    /// setting "Quando ridimensiono, aggancia allo spazio disponibile").
+    private var fillsFreeSpaceEnabled: Bool {
+        UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapFillsFreeSpace)
+    }
+
+    /// Substitutes `theoreticalZone` with the free space
+    /// `SnapGroupSupport.freeSpace` computes, when there is a Snap Group on
+    /// the matching screen with at least one other member — otherwise
+    /// returns `theoreticalZone` unchanged, so every caller can pass its
+    /// already-computed rect through here unconditionally instead of
+    /// special-casing the "no group yet" case itself. `fallbackFrame` (the
+    /// window's own current AX frame) resolves the screen when no live
+    /// `NSScreen` still reports exactly `visibleFrame` — a display can be
+    /// reconfigured between a target being computed and read back.
+    private func freeSpaceAdjusted(for action: WindowLayoutAction,
+                                   theoreticalZone: CGRect,
+                                   visibleFrame: NSRect,
+                                   fallbackFrame: WindowLayoutFrame,
+                                   excluding windowID: CGWindowID?) -> CGRect {
+        guard fillsFreeSpaceEnabled, SnapGroupSupport.joinsGroup(action) else { return theoreticalZone }
+        guard let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame) else {
+            return theoreticalZone
+        }
+        var group = snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID)
+        if let windowID {
+            group.members.removeAll { $0.windowID == windowID }
+        }
+        guard !group.members.isEmpty else { return theoreticalZone }
+        return SnapGroupSupport.freeSpace(for: action,
+                                          theoreticalZone: theoreticalZone,
+                                          group: group,
+                                          gap: WindowLayoutGaps.windowGap,
+                                          currentFrames: currentFrames(for: group))
+    }
+
+    /// The screen a previously computed `visibleFrame` belongs to. Matched
+    /// by value rather than kept as an `NSScreen` reference throughout,
+    /// since every caller here only ever carried the `CGRect` forward; falls
+    /// back to whichever screen the window itself currently overlaps most
+    /// when no screen's visible frame matches exactly (a display changed
+    /// resolution or was unplugged between the two reads).
+    private func screen(matchingVisibleFrame visibleFrame: NSRect,
+                        fallbackFrame: WindowLayoutFrame) -> NSScreen? {
+        NSScreen.screens.first { $0.visibleFrame == visibleFrame } ?? bestScreen(for: fallbackFrame)
+    }
+
+    /// Records or replaces `windowID`'s Snap Group membership on the screen
+    /// `visibleFrame` belongs to, right after a placement wrote `action`
+    /// there successfully — the single point every placement path (shortcut,
+    /// directional gesture, edge snap, Snap Layouts) funnels through via
+    /// `applyPlacement`.
+    private func updateSnapGroup(action: WindowLayoutAction,
+                                 windowID: CGWindowID,
+                                 appliedRect: CGRect,
+                                 visibleFrame: NSRect,
+                                 fallbackFrame: WindowLayoutFrame) {
+        guard let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame) else { return }
+        let group = snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID)
+        let updated = SnapGroupSupport.updated(group: group,
+                                               windowID: windowID,
+                                               action: action,
+                                               appliedFrame: appliedRect,
+                                               currentFrames: currentFrames(for: group))
+        if updated.members.isEmpty {
+            snapGroups.removeValue(forKey: screen.displayID)
+        } else {
+            snapGroups[screen.displayID] = updated
+        }
+    }
+
+    /// Drops `windowID` from every Snap Group it might be in — used wherever
+    /// a placement leaves the group outright (maximize, full screen,
+    /// restore, a display change) rather than moving within it.
+    private func removeFromAllSnapGroups(_ windowID: CGWindowID) {
+        for screenID in snapGroups.keys {
+            snapGroups[screenID]?.members.removeAll { $0.windowID == windowID }
+            if snapGroups[screenID]?.members.isEmpty == true {
+                snapGroups.removeValue(forKey: screenID)
+            }
+        }
+    }
+
+    /// Live frames for a Snap Group's members, read via Accessibility right
+    /// now. Never `member.frame`, which is the zone a member was placed into
+    /// and stays fixed as the neighbour-adjacency reference
+    /// (`SnapGroupSupport`); never cached, since noticing a hand-resized
+    /// neighbour is the entire point of this feature. A window whose owning
+    /// process cannot be found, or that reads back minimized, is simply left
+    /// out of the result — `SnapGroupSupport.pruned` is what then drops it
+    /// from the group, which is how a closed or minimized member leaves.
+    private func currentFrames(for group: SnapGroup) -> [CGWindowID: CGRect] {
+        guard !group.members.isEmpty,
+              let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements],
+                                                       kCGNullWindowID) as? [[String: Any]]
+        else { return [:] }
+        var ownerPIDs: [CGWindowID: pid_t] = [:]
+        for window in windows {
+            guard let windowID = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                  let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+            else { continue }
+            ownerPIDs[windowID] = pid
+        }
+        var apps: [pid_t: AXUIElement] = [:]
+        var frames: [CGWindowID: CGRect] = [:]
+        for member in group.members {
+            guard let pid = ownerPIDs[member.windowID] else { continue }
+            let axApp = apps[pid] ?? {
+                let created = AXUIElementCreateApplication(pid)
+                AXUIElementSetMessagingTimeout(created, 0.35)
+                apps[pid] = created
+                return created
+            }()
+            guard let axWindow = axElement(windowID: member.windowID, in: axApp),
+                  !boolAttribute(axWindow, kAXMinimizedAttribute as String),
+                  let frame = frame(of: axWindow)
+            else { continue }
+            frames[member.windowID] = appKitFrame(fromAX: frame)
+        }
+        return frames
+    }
+
+    private func axElement(windowID: CGWindowID, in axApp: AXUIElement) -> AXUIElement? {
+        windowsAttribute(axApp)?.first { AXWindowResolver.windowID(for: $0) == windowID }
     }
 
     private func setFrame(_ frame: WindowLayoutFrame,
@@ -899,7 +1053,8 @@ final class WindowLayoutService: ObservableObject {
 
         if let layoutAction = action.layoutAction {
             let preview = placement(for: layoutAction, current: session.target.frame,
-                                    visibleFrame: session.visibleFrame).rect
+                                    visibleFrame: session.visibleFrame,
+                                    excluding: session.target.windowID).rect
             showEdgeSnapPreview(frame: preview)
         } else {
             hideEdgeSnapPreview(immediately: true)
@@ -1342,6 +1497,16 @@ final class WindowLayoutService: ObservableObject {
     /// `WindowEdgeSnapDrag.target` keeps flowing into the same
     /// `applyEdgeSnap` regardless of which path produced it.
     private func resolvedEdgeSnapTarget(atQuartzPoint point: CGPoint) -> WindowEdgeSnapTarget? {
+        // The live preview has to show exactly the rectangle a release would
+        // write (spec §5's "what you see is what you get"), so every branch
+        // below funnels through the same free-space adjustment before
+        // returning, regardless of which one produced the raw target —
+        // the classic corner/half fallback, an open panel's hovered cell, or
+        // its own maximize/corner fallback.
+        rawResolvedEdgeSnapTarget(atQuartzPoint: point).map(snapGroupAdjusted)
+    }
+
+    private func rawResolvedEdgeSnapTarget(atQuartzPoint point: CGPoint) -> WindowEdgeSnapTarget? {
         guard snapLayoutsEnabled else {
             hideSnapLayoutsPanel()
             return edgeSnapTarget(atQuartzPoint: point)
@@ -1363,6 +1528,22 @@ final class WindowLayoutService: ObservableObject {
         snapLayoutsActiveScreen = triggerScreen
         showSnapLayoutsPanel(on: triggerScreen)
         return openPanelTarget(at: hoverPoint, on: triggerScreen)
+    }
+
+    /// Replaces a preview target's theoretical frame with the real free
+    /// space its Snap Group neighbours leave, using the same adjustment
+    /// `placement(for:current:visibleFrame:excluding:)` applies to the frame
+    /// that eventually gets written — this is the preview half of that
+    /// parity, with the dragged window itself (if it was already a group
+    /// member) excluded so its own old zone never shrinks its own preview.
+    private func snapGroupAdjusted(_ target: WindowEdgeSnapTarget) -> WindowEdgeSnapTarget {
+        let adjusted = freeSpaceAdjusted(for: target.action,
+                                         theoreticalZone: target.frame,
+                                         visibleFrame: target.visibleFrame,
+                                         fallbackFrame: axFrame(fromAppKit: target.frame),
+                                         excluding: edgeSnapDrag?.key.windowID)
+        guard adjusted != target.frame else { return target }
+        return WindowEdgeSnapTarget(action: target.action, frame: adjusted.integral, visibleFrame: target.visibleFrame)
     }
 
     /// The target while the panel is open (or just opened this sample):

@@ -6061,6 +6061,158 @@ struct MetricsTests {
                == slFallback(CGPoint(x: 50, y: slScreen.visibleFrame.maxY)),
                "the fallback and the classic corner/half snap agree at the left corner boundary")
 
+        // MARK: Snap Groups
+
+        expect(WindowLayoutAction.allCases.allSatisfy { action in
+                   SnapGroupSupport.joinsGroup(action)
+                       == ![.maximize, .marginMaximize, .fullScreen, .center,
+                            .previousDisplay, .nextDisplay, .restore].contains(action)
+               },
+               "every partial zone joins a Snap Group; every screen-wide or positional action does not")
+
+        expect(SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
+                                                  currentFrame: CGRect(x: 0, y: 0, width: 500, height: 600)),
+               "a window untouched since it snapped still fully overlaps its own zone")
+        expect(SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
+                                                  currentFrame: CGRect(x: 100, y: 0, width: 500, height: 600)),
+               "a window nudged but still mostly over its zone counts as staying")
+        expect(!SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
+                                                   currentFrame: CGRect(x: 700, y: 0, width: 500, height: 600)),
+               "a window dragged clear of its zone no longer overlaps it")
+        expect(!SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
+                                                   currentFrame: .zero),
+               "a zero-size current frame (a read that raced a close) never counts as overlapping")
+
+        // Every Snap Group fixture below uses real zones from
+        // WindowLayoutGeometry.rect, gapped exactly as production frames
+        // are: neighbouring zones sit a full `sgGap` apart, not flush,
+        // because each one already gave up half of it (`windowGapped`) —
+        // free space has to treat that gap as still touching.
+        let sgVisibleFrame = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let sgGap: CGFloat = 10
+        func sgZone(_ action: WindowLayoutAction) -> CGRect {
+            WindowLayoutGeometry.rect(for: action, current: sgVisibleFrame,
+                                      visibleFrame: sgVisibleFrame, windowGap: sgGap)
+        }
+        let sgLeftZone = sgZone(.leftHalf)
+        let sgRightZone = sgZone(.rightHalf)
+        let sgLeftMember = SnapGroupMember(windowID: 1, action: .leftHalf, frame: sgLeftZone)
+        var sgGroup = SnapGroup(screenID: 1, members: [sgLeftMember])
+
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf,
+                                          theoreticalZone: sgRightZone,
+                                          group: sgGroup,
+                                          gap: sgGap,
+                                          currentFrames: [1: sgLeftZone])
+               == sgRightZone,
+               "an untouched neighbour leaves the theoretical zone exactly as it was")
+
+        // Side by side after resize: A grows to 600pt wide, B fills the
+        // remaining space instead of overlapping A (spec §5's example).
+        let sgLeftResized = CGRect(x: 0, y: 0, width: 600, height: 600)
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf,
+                                          theoreticalZone: sgRightZone,
+                                          group: sgGroup,
+                                          gap: sgGap,
+                                          currentFrames: [1: sgLeftResized])
+               == CGRect(x: 610, y: 0, width: 390, height: 600),
+               "a resized left neighbour shrinks the right zone to the space it actually left, plus the gap")
+
+        // Stacked: A (top) grows downward, invading B's (bottom) theoretical
+        // zone, and B stops short of it instead of overlapping.
+        let sgTopZone = sgZone(.topHalf)
+        let sgBottomZone = sgZone(.bottomHalf)
+        let sgTopMember = SnapGroupMember(windowID: 2, action: .topHalf, frame: sgTopZone)
+        let sgTopGrown = CGRect(x: 0, y: 250, width: 1000, height: 350)
+        expect(SnapGroupSupport.freeSpace(for: .bottomHalf,
+                                          theoreticalZone: sgBottomZone,
+                                          group: SnapGroup(screenID: 1, members: [sgTopMember]),
+                                          gap: sgGap,
+                                          currentFrames: [2: sgTopGrown])
+               == CGRect(x: 0, y: 0, width: 1000, height: 240),
+               "a resized top neighbour shrinks the bottom zone vertically the same way")
+
+        // Quarters: bottomRight has two neighbours, bottomLeft (horizontal)
+        // and topRight (vertical), each shrinking a different axis.
+        let sgBottomLeftZone = sgZone(.bottomLeft)
+        let sgTopRightZone = sgZone(.topRight)
+        let sgBottomRightZone = sgZone(.bottomRight)
+        let sgQuartersGroup = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 3, action: .bottomLeft, frame: sgBottomLeftZone),
+            SnapGroupMember(windowID: 4, action: .topRight, frame: sgTopRightZone),
+        ])
+        expect(SnapGroupSupport.freeSpace(for: .bottomRight,
+                                          theoreticalZone: sgBottomRightZone,
+                                          group: sgQuartersGroup,
+                                          gap: sgGap,
+                                          currentFrames: [
+                                              3: CGRect(x: 0, y: 0, width: 560, height: 300),
+                                              4: CGRect(x: 505, y: 220, width: 495, height: 380),
+                                          ])
+               == CGRect(x: 570, y: 0, width: 430, height: 210),
+               "a quarters corner shrinks on both axes at once, one per touching neighbour")
+
+        // Minimum-size fallback: the neighbour grew so much that what is left
+        // would be a sliver, so the theoretical zone is used instead.
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf,
+                                          theoreticalZone: sgRightZone,
+                                          group: sgGroup,
+                                          gap: sgGap,
+                                          currentFrames: [1: CGRect(x: 0, y: 0, width: 850, height: 600)])
+               == sgRightZone,
+               "a shrunk-to-a-sliver result falls back to the theoretical zone instead")
+
+        // Dragged away: the neighbour's live frame no longer overlaps its own
+        // zone, so it stops constraining anything.
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf,
+                                          theoreticalZone: sgRightZone,
+                                          group: sgGroup,
+                                          gap: sgGap,
+                                          currentFrames: [1: CGRect(x: 700, y: 0, width: 500, height: 600)])
+               == sgRightZone,
+               "a neighbour dragged off its own zone leaves the group and stops shrinking anything")
+
+        expect(SnapGroupSupport.freeSpace(for: .maximize,
+                                          theoreticalZone: CGRect(x: 0, y: 0, width: 1000, height: 600),
+                                          group: sgGroup,
+                                          gap: sgGap,
+                                          currentFrames: [1: sgLeftZone])
+               == CGRect(x: 0, y: 0, width: 1000, height: 600),
+               "an action that does not join a group is never adjusted, even with neighbours present")
+
+        let sgPruned = SnapGroupSupport.pruned(group: sgGroup,
+                                               currentFrames: [1: CGRect(x: 700, y: 0, width: 500, height: 600)])
+        expect(sgPruned.members.isEmpty,
+               "pruning drops a member whose live frame has drifted off its own zone")
+        expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:]).members.isEmpty,
+               "pruning drops a member Accessibility could not find a live frame for (closed or minimized)")
+
+        let sgAfterMaximize = SnapGroupSupport.updated(group: sgGroup,
+                                                       windowID: 1,
+                                                       action: .maximize,
+                                                       appliedFrame: CGRect(x: 0, y: 0, width: 1000, height: 600),
+                                                       currentFrames: [1: sgLeftZone])
+        expect(sgAfterMaximize.members.isEmpty,
+               "maximizing a group member removes it instead of updating its zone")
+
+        let sgAfterRightHalf = SnapGroupSupport.updated(group: sgGroup,
+                                                        windowID: 1,
+                                                        action: .rightHalf,
+                                                        appliedFrame: sgRightZone,
+                                                        currentFrames: [1: sgLeftZone])
+        expect(sgAfterRightHalf.members == [SnapGroupMember(windowID: 1, action: .rightHalf, frame: sgRightZone)],
+               "re-snapping a group member to a new zone replaces its old membership rather than adding a second one")
+
+        sgGroup = SnapGroup(screenID: 1, members: [sgLeftMember])
+        let sgGroupOnOtherScreen = SnapGroup(screenID: 2)
+        let sgGroupWithNewMember = SnapGroupSupport.updated(group: sgGroup,
+                                                            windowID: 5,
+                                                            action: .leftHalf,
+                                                            appliedFrame: sgLeftZone,
+                                                            currentFrames: [1: sgLeftZone])
+        expect(sgGroupWithNewMember.members.count == 2 && sgGroupOnOtherScreen.members.isEmpty,
+               "each screen keeps its own independent group; updating one never touches another's")
+
         // MARK: Window move and resize gestures
 
         expect(WindowGestureSupport.modifiers(from: nil) == [.control, .command],

@@ -13,6 +13,7 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowDirectionalShortcut) private var directionalShortcutRaw = GlobalShortcut.windowDirectionalDefault.storageValue
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
     @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
+    @AppStorage(DefaultsKey.windowSnapFillsFreeSpace) private var snapFillsFreeSpace = true
     @AppStorage(DefaultsKey.windowGestureEnabled) private var gestureEnabled = false
     @AppStorage(DefaultsKey.windowGestureModifiers) private var gestureModifiers = WindowGestureSupport.defaultModifierStorageValue
     @AppStorage(DefaultsKey.windowGestureRaiseWindow) private var gestureRaiseWindow = false
@@ -74,6 +75,14 @@ struct WindowLayoutSettings: View {
                             WindowLayoutService.shared.syncWithPreferences()
                         }
                     Text(text.snapLayoutsCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // No onChange/syncWithPreferences call: this toggle only
+                    // ever changes what a placement's own frame computation
+                    // reads at the moment it runs, unlike the toggles above
+                    // it that start or stop an event tap.
+                    Toggle(text.snapFillsFreeSpaceEnable, isOn: $snapFillsFreeSpace)
+                    Text(text.snapFillsFreeSpaceCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

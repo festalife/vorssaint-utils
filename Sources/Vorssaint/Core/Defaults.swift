@@ -584,6 +584,7 @@ enum DefaultsKey {
     static let windowDirectionalShortcut = "windowDirectionalShortcut"
     static let windowEdgeSnapEnabled = "windowEdgeSnapEnabled"
     static let windowSnapLayoutsEnabled = "windowSnapLayoutsEnabled"
+    static let windowSnapFillsFreeSpace = "windowSnapFillsFreeSpace"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1301,6 +1302,10 @@ enum Defaults {
         // also on, so it never surfaces new behavior by itself — same
         // reasoning Windows 11 uses shipping it on out of the box.
         DefaultsKey.windowSnapLayoutsEnabled: true,
+        // On by default for the same reason: it only ever changes anything
+        // once a real Snap Group already exists, so it never surfaces new
+        // behavior on its own.
+        DefaultsKey.windowSnapFillsFreeSpace: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,
