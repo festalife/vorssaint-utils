@@ -329,6 +329,20 @@ enum DefaultsKey {
     static let fanControlMode = "fanControlMode"
     static let fanControlCoolingLevel = "fanControlCoolingLevel"
     static let fanControlCurves = "fanControlCurves"
+    // The user's currently selected manual-session length (a
+    // FanControlManualDuration raw value), independent of whether that
+    // session is actually running.
+    static let fanControlManualDuration = "fanControlManualDuration"
+    // Machine-only. The absolute deadline (seconds since 1970) of the manual
+    // session in progress, or absent when none is running. Persisted so the
+    // panel can show a remaining-time label before the first XPC round trip
+    // completes and across an app restart; the helper enforces the deadline
+    // on its own regardless of whether this key exists.
+    static let fanControlManualUntil = "fanControlManualUntil"
+    // Machine-only. Which mode (system or curve) a timed manual override
+    // should hand control back to once it expires; set once when the
+    // override begins, cleared together with fanControlManualUntil.
+    static let fanControlModeBeforeManual = "fanControlModeBeforeManual"
     // Previous panel visibility key, read once by the migration below.
     static let monitorShowFanControlBeta = "monitorShowFanControlBeta"
     // Machine-only recovery state. A true value means the helper must confirm
@@ -1094,6 +1108,9 @@ enum Defaults {
         DefaultsKey.fanControlMode: FanControlMode.system.rawValue,
         DefaultsKey.fanControlCoolingLevel: FanControlPolicy.defaultCoolingLevel,
         DefaultsKey.fanControlCurves: FanControlConfiguration.defaultCurvesStorage,
+        // Untouched manual sessions never expire, matching manual mode's
+        // behavior before this preference existed.
+        DefaultsKey.fanControlManualDuration: FanControlManualDuration.untilChanged.rawValue,
         DefaultsKey.fanControlRecoveryNeeded: false,
         DefaultsKey.fanControlHelperVersion: "",
         DefaultsKey.panelNavigationEnabled: true,
