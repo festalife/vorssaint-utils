@@ -36,14 +36,20 @@ enum SnapGroupSupport {
     /// same bailout spec §9 describes for an oversized minimum window size.
     static let minimumSpace: CGFloat = 200
 
-    /// How far two zone edges can differ and still count as touching.
+    /// How far two *zone* edges — never a current frame, see the note on
+    /// `freeSpace` below — can differ and still count as touching.
     /// `WindowLayoutGeometry.rect` already shaves half of `gap` off every
     /// edge a placement shares with a neighbour (`windowGapped`), so two
     /// genuinely adjacent zones sit up to a full `gap` apart, not flush —
-    /// the tolerance has to cover that, plus a couple of points for
-    /// independent `.integral` rounding on each side.
+    /// the tolerance has to cover that, plus a few points for independent
+    /// `.integral` rounding on each side and for the visible frame itself
+    /// legitimately reading a point or two different between when a
+    /// neighbour's zone was recorded and when this zone is being requested
+    /// (a transient Dock reveal, for instance). Matches `stillAnchored`'s
+    /// own tolerance below so the two never disagree about what counts as
+    /// "the same edge."
     private static func edgeTolerance(gap: CGFloat) -> CGFloat {
-        max(2, gap + 2)
+        max(3, gap + 3)
     }
 
     /// The shortest edge overlap that counts as two zones sharing a real
@@ -218,6 +224,20 @@ enum SnapGroupSupport {
     /// screen's own visible frame here: an edge proposed by a neighbour
     /// that has moved off-screen or inverted the rectangle collapses the
     /// result below the minimum and is discarded wholesale.
+    ///
+    /// **Two different rectangles per neighbour, on purpose, never
+    /// conflated:** `neighbourZone` (`member.frame`) — fixed at the moment
+    /// the neighbour joined the group — decides *whether* it neighbours
+    /// `theoreticalZone` at all, by comparing zone edges to zone edges.
+    /// `currentFrame` (`currentFrames[member.windowID]`) supplies *where*
+    /// the shared edge actually is right now, once that neighbour
+    /// relationship is established. Deciding adjacency from `currentFrame`
+    /// instead would be wrong in exactly the case this function exists for:
+    /// the moment a neighbour resizes, its current edge moves away from
+    /// `theoreticalZone` by design, so a current-frame-based adjacency test
+    /// would call it "no longer touching" and silently stop adjusting —
+    /// worse the more the neighbour has resized, i.e. worst exactly when
+    /// this feature matters most.
     static func freeSpace(for action: WindowLayoutAction,
                           theoreticalZone: CGRect,
                           group: SnapGroup,
@@ -237,29 +257,34 @@ enum SnapGroupSupport {
         var maxYCandidates: [CGFloat] = []
 
         for member in members {
-            guard let current = currentFrames[member.windowID] else { continue }
-            let zone = member.frame
+            guard let currentFrame = currentFrames[member.windowID] else { continue }
+            let neighbourZone = member.frame
 
             // A horizontal neighbour (left/right of the requested zone)
             // shares its full vertical extent; two zones that only meet at a
             // corner have essentially no shared Y range and are skipped.
-            let verticalOverlap = min(zone.maxY, theoreticalZone.maxY) - max(zone.minY, theoreticalZone.minY)
+            // Every comparison against `theoreticalZone` here reads from
+            // `neighbourZone`, never `currentFrame` — see the doc comment
+            // above for why that distinction is load-bearing.
+            let verticalOverlap = min(neighbourZone.maxY, theoreticalZone.maxY)
+                - max(neighbourZone.minY, theoreticalZone.minY)
             if verticalOverlap > edgeOverlapMinimum {
-                if abs(zone.maxX - theoreticalZone.minX) <= tolerance {
-                    minXCandidates.append(current.maxX + gap)
-                } else if abs(zone.minX - theoreticalZone.maxX) <= tolerance {
-                    maxXCandidates.append(current.minX - gap)
+                if abs(neighbourZone.maxX - theoreticalZone.minX) <= tolerance {
+                    minXCandidates.append(currentFrame.maxX + gap)
+                } else if abs(neighbourZone.minX - theoreticalZone.maxX) <= tolerance {
+                    maxXCandidates.append(currentFrame.minX - gap)
                 }
             }
 
             // A vertical neighbour (above/below) shares its full horizontal
             // extent by the same reasoning.
-            let horizontalOverlap = min(zone.maxX, theoreticalZone.maxX) - max(zone.minX, theoreticalZone.minX)
+            let horizontalOverlap = min(neighbourZone.maxX, theoreticalZone.maxX)
+                - max(neighbourZone.minX, theoreticalZone.minX)
             if horizontalOverlap > edgeOverlapMinimum {
-                if abs(zone.maxY - theoreticalZone.minY) <= tolerance {
-                    minYCandidates.append(current.maxY + gap)
-                } else if abs(zone.minY - theoreticalZone.maxY) <= tolerance {
-                    maxYCandidates.append(current.minY - gap)
+                if abs(neighbourZone.maxY - theoreticalZone.minY) <= tolerance {
+                    minYCandidates.append(currentFrame.maxY + gap)
+                } else if abs(neighbourZone.minY - theoreticalZone.maxY) <= tolerance {
+                    maxYCandidates.append(currentFrame.minY - gap)
                 }
             }
         }

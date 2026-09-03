@@ -6277,6 +6277,29 @@ struct MetricsTests {
                == CGRect(x: 700, y: 0, width: 812, height: 949),
                "a neighbour shrunk outside Vorssaint lets the next zone extend to fill exactly the space that opened up, no hole left behind")
 
+        // Same regression, but built through the exact sequence of calls
+        // WindowLayoutService actually makes rather than a hand-assembled
+        // SnapGroupMember/SnapGroup: updated(...) is what updateSnapGroup
+        // calls right after A's own placement succeeds (recording A's zone
+        // as the theoretical leftHalf, since no group existed yet to shrink
+        // it against), and freeSpace(...) is what placement(for:) calls for
+        // B's placement — the same two entry points the service uses, in
+        // the same order, with nothing else standing in for real wiring.
+        let sgServiceLikeGroup = SnapGroupSupport.updated(group: SnapGroup(screenID: 1),
+                                                          windowID: 10,
+                                                          action: .leftHalf,
+                                                          appliedFrame: sgRealLeftZone,
+                                                          currentFrames: [:])
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf,
+                                          theoreticalZone: sgRealRightZone,
+                                          group: sgServiceLikeGroup,
+                                          gap: 0,
+                                          currentFrames: [10: CGRect(x: 0, y: 0, width: 700, height: 949)])
+               == CGRect(x: 700, y: 0, width: 812, height: 949),
+               "the exact same shrunk-neighbour numbers, with the group built by updated(...) exactly as " +
+               "updateSnapGroup calls it, not assembled by hand — adjacency still comes from A's recorded " +
+               "zone (756), never from A's live 700pt frame, so it is still recognized as B's left neighbour")
+
         // Non-partial actions must never be adjusted, no matter how large or
         // stale the group on that screen is — the guard has to be the very
         // first thing freeSpace checks, before it even looks at members.
