@@ -602,28 +602,44 @@ final class WindowLayoutService: ObservableObject {
         }
     }
 
-    /// Per-screen cache of `rawCurrentFrames(for:)`, refreshed at most once
-    /// per `edgeSnapSampleInterval`. `updateEdgeSnapDrag` resolves a preview
-    /// target — and so consults a Snap Group's live frames — on every
-    /// sample once `drag.isMoving`, at up to 30 Hz; the sample-interval
-    /// throttle inside `updateEdgeSnapDrag` only gates *classification*, not
-    /// the target resolution that follows it every time. Without this
-    /// cache, a live drag would run a full `CGWindowListCopyWindowInfo` scan
-    /// plus one Accessibility round trip per group member on every single
-    /// mouse-moved event, and a member whose owning app has hung would
-    /// stall the main thread on every one of them instead of once every
-    /// ~33ms.
+    /// How long a cached `currentFrames(for:on:)` result stays usable.
+    /// Deliberately *not* `edgeSnapSampleInterval`: that constant only
+    /// throttles the *classification* half of `updateEdgeSnapDrag`, gated by
+    /// `!drag.isMoving` — once a drag is classified as moving, every single
+    /// `leftMouseDragged` callback the OS delivers (which can run well past
+    /// 30 Hz on a fast mouse or trackpad) calls straight through to
+    /// `resolvedEdgeSnapTarget` with no throttle of its own. Reusing that
+    /// 33ms constant here would have refreshed on nearly every callback
+    /// anyway; a materially longer window is what actually amortizes the
+    /// Accessibility cost across many samples of one held position.
+    private static let groupFramesCacheTTL: TimeInterval = 0.2
+
+    /// Per-screen cache of `rawCurrentFrames(for:)`. Without it, a live drag
+    /// would run a full `CGWindowListCopyWindowInfo` scan plus one
+    /// Accessibility round trip per group member on every single
+    /// mouse-moved event — and `groupMemberMessagingTimeout` below caps only
+    /// the *per-member* worst case, not how often that worst case can be
+    /// paid.
     private var groupFramesCache: [CGDirectDisplayID: (frames: [CGWindowID: CGRect], at: TimeInterval)] = [:]
 
     private func currentFrames(for group: SnapGroup, on screen: NSScreen) -> [CGWindowID: CGRect] {
         let now = ProcessInfo.processInfo.systemUptime
-        if let cached = groupFramesCache[screen.displayID], now - cached.at < edgeSnapSampleInterval {
+        if let cached = groupFramesCache[screen.displayID], now - cached.at < Self.groupFramesCacheTTL {
             return cached.frames
         }
         let frames = rawCurrentFrames(for: group)
         groupFramesCache[screen.displayID] = (frames, now)
         return frames
     }
+
+    /// Accessibility messaging timeout used only for a Snap Group member's
+    /// *background* frame read — a window the user is not currently
+    /// interacting with, unlike `focusedTarget(for:)`'s 0.35s, which
+    /// deliberately waits longer because that read is for the one window the
+    /// user is actively working in. A background member that is hung or
+    /// gone should give up fast, not cost a third of a second per member on
+    /// the very sample that is trying to show a live preview.
+    private static let groupMemberMessagingTimeout: Float = 0.05
 
     /// Live frames for a Snap Group's members, read via Accessibility right
     /// now. Never `member.frame`, which is the zone a member was placed into
@@ -653,7 +669,7 @@ final class WindowLayoutService: ObservableObject {
             guard let pid = ownerPIDs[member.windowID] else { continue }
             let axApp = apps[pid] ?? {
                 let created = AXUIElementCreateApplication(pid)
-                AXUIElementSetMessagingTimeout(created, 0.35)
+                AXUIElementSetMessagingTimeout(created, Self.groupMemberMessagingTimeout)
                 apps[pid] = created
                 return created
             }()

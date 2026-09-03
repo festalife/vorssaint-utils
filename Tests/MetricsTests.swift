@@ -6190,6 +6190,14 @@ struct MetricsTests {
                "pruning drops a member whose live frame has drifted off its own zone")
         expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:]).members.isEmpty,
                "pruning drops a member Accessibility could not find a live frame for (closed or minimized)")
+        // Pruning has to be a "pay once" operation: WindowLayoutService
+        // persists the pruned group back to its store the moment anything
+        // is dropped, specifically so a member that cannot be resolved is
+        // never retried on the next drag sample. A second prune against the
+        // already-shrunk group (still handed the same unresolvable
+        // Accessibility state) must therefore be a stable no-op.
+        expect(SnapGroupSupport.pruned(group: sgPruned, currentFrames: [:]) == sgPruned,
+               "pruning an already-pruned group is idempotent, not a repeated attempt at the same lookups")
 
         let sgAfterMaximize = SnapGroupSupport.updated(group: sgGroup,
                                                        windowID: 1,
