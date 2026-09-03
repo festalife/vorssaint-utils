@@ -6070,22 +6070,42 @@ struct MetricsTests {
                },
                "every partial zone joins a Snap Group; every screen-wide or positional action does not")
 
-        expect(SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
-                                                  currentFrame: CGRect(x: 0, y: 0, width: 500, height: 600)),
-               "a window untouched since it snapped still fully overlaps its own zone")
-        expect(SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
-                                                  currentFrame: CGRect(x: 100, y: 0, width: 500, height: 600)),
-               "a window nudged but still mostly over its zone counts as staying")
-        expect(!SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
-                                                   currentFrame: CGRect(x: 700, y: 0, width: 500, height: 600)),
-               "a window dragged clear of its zone no longer overlaps it")
-        expect(!SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 500, height: 600),
-                                                   currentFrame: .zero),
-               "a zero-size current frame (a read that raced a close) never counts as overlapping")
-        expect(SnapGroupSupport.stillOverlapsZone(memberZone: CGRect(x: 0, y: 0, width: 400, height: 600),
-                                                  currentFrame: CGRect(x: 0, y: 0, width: 1200, height: 600)),
-               "a member grown to 3x its own zone width without moving stays in the group — the overlap " +
-               "fraction is against the smaller shape, not always the (now much larger) current frame")
+        // stillAnchored replaces an overlap-area test with Windows' own
+        // rule: resizing along the screen-anchored edge(s) never un-snaps a
+        // member, but moving it — even a small nudge that still leaves most
+        // of the window over its old zone — always does.
+        let sgLeftHalfFixtureZone = CGRect(x: 0, y: 0, width: 500, height: 600)
+        let sgLeftHalfFixture = SnapGroupMember(windowID: 40, action: .leftHalf, frame: sgLeftHalfFixtureZone)
+        expect(SnapGroupSupport.stillAnchored(member: sgLeftHalfFixture, currentFrame: sgLeftHalfFixtureZone),
+               "a window untouched since it snapped is still anchored to its own zone")
+        expect(SnapGroupSupport.stillAnchored(member: sgLeftHalfFixture,
+                                              currentFrame: CGRect(x: 0, y: 0, width: 700, height: 600)),
+               "resized in place — the left/top/bottom screen edges leftHalf is anchored to are untouched — " +
+               "stays in the group even though the window is now a different size")
+        expect(!SnapGroupSupport.stillAnchored(member: sgLeftHalfFixture,
+                                               currentFrame: CGRect(x: 100, y: 0, width: 500, height: 600)),
+               "moved 100pt right — leftHalf's anchored minX edge drifted off the screen edge it was flush " +
+               "with — leaves the group even though the window is still the same size and still mostly over its old zone")
+        expect(!SnapGroupSupport.stillAnchored(member: sgLeftHalfFixture,
+                                               currentFrame: CGRect(x: 700, y: 0, width: 500, height: 600)),
+               "a window dragged clear of its zone is no longer anchored to it")
+        expect(!SnapGroupSupport.stillAnchored(member: sgLeftHalfFixture, currentFrame: .zero),
+               "a zero-size current frame (a read that raced a close) is never anchored")
+
+        // A quarter is anchored on the two screen edges it touches (here,
+        // topLeft's left and top) and free on the two inner edges facing
+        // its neighbours (right and bottom) — growing on both of those at
+        // once still keeps it anchored, matching the earlier quarters test.
+        let sgTopLeftFixtureZone = CGRect(x: 0, y: 300, width: 500, height: 300)
+        let sgTopLeftFixture = SnapGroupMember(windowID: 41, action: .topLeft, frame: sgTopLeftFixtureZone)
+        expect(SnapGroupSupport.stillAnchored(member: sgTopLeftFixture,
+                                              currentFrame: CGRect(x: 0, y: 200, width: 700, height: 400)),
+               "a topLeft quarter grown on both of its free inner edges (wider to the right, taller " +
+               "downward) stays anchored, since neither growth touches its left or top screen edge")
+        expect(!SnapGroupSupport.stillAnchored(member: sgTopLeftFixture,
+                                               currentFrame: CGRect(x: 50, y: 300, width: 500, height: 300)),
+               "the same quarter nudged 50pt right off its left screen edge leaves the group even though " +
+               "its size never changed")
 
         // Every Snap Group fixture below uses real zones from
         // WindowLayoutGeometry.rect, gapped exactly as production frames
@@ -6243,6 +6263,19 @@ struct MetricsTests {
                                           currentFrames: [10: CGRect(x: 0, y: 0, width: 907, height: 949)])
                == CGRect(x: 907, y: 0, width: 605, height: 949),
                "a neighbour resized outside Vorssaint (Accessibility setFrame, not a shortcut) still shrinks the next zone")
+
+        // The same regression the other way: A shrunk to 700pt instead of
+        // grown. Free space has to extend into the space that opened up —
+        // clamping only toward the theoretical zone (as an earlier version
+        // of this function did) left a hole between A's real edge and B's
+        // theoretical one instead of filling it.
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf,
+                                          theoreticalZone: sgRealRightZone,
+                                          group: sgRealGroup,
+                                          gap: 0,
+                                          currentFrames: [10: CGRect(x: 0, y: 0, width: 700, height: 949)])
+               == CGRect(x: 700, y: 0, width: 812, height: 949),
+               "a neighbour shrunk outside Vorssaint lets the next zone extend to fill exactly the space that opened up, no hole left behind")
 
         // Non-partial actions must never be adjusted, no matter how large or
         // stale the group on that screen is — the guard has to be the very
