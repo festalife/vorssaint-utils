@@ -141,9 +141,7 @@ final class FanControlService: ObservableObject {
             return
         }
         error = nil
-        if configuration.mode == .manual {
-            recordManualTimerState(for: configuration)
-        } else {
+        if configuration.mode != .manual {
             clearManualTimerState()
         }
         let retrySnapshot = snapshot
@@ -158,13 +156,24 @@ final class FanControlService: ObservableObject {
             self.isWorking = false
             guard let response else {
                 self.error = .helperUnavailable
+                // No confirmation either way: do not let a half-applied
+                // request leave a later override reading a stale "previous
+                // mode" or deadline.
+                self.clearManualTimerState()
                 self.restoreAutomatic()
                 return
             }
             self.apply(response)
             if response.succeeded, response.snapshot.isCooling {
+                // Only recorded once the helper has actually confirmed the
+                // override is running, using the state from just before this
+                // apply (retrySnapshot), not the just-applied response.
+                if configuration.mode == .manual {
+                    self.recordManualTimerState(for: configuration, previousSnapshot: retrySnapshot)
+                }
                 self.startTimerIfNeeded()
             } else {
+                self.clearManualTimerState()
                 self.restoreAutomatic(supersedingCurrentRequest: false,
                                       preserving: response.error ?? .controlFailed,
                                       retrySnapshot: retrySnapshot)
@@ -190,6 +199,10 @@ final class FanControlService: ObservableObject {
             self.isWorking = false
             guard let response else {
                 self.error = .helperUnavailable
+                // Same reasoning as applyConfiguration's no-response branch:
+                // an unconfirmed restore must not leave stale bookkeeping for
+                // a later override to inherit.
+                self.clearManualTimerState()
                 return
             }
             self.apply(response)
@@ -412,10 +425,17 @@ final class FanControlService: ObservableObject {
 
     /// The deadline itself is enforced by the helper (see
     /// `FanControlPolicy.sessionDuration`), reusing the `endsAt`/watchdog
-    /// mechanism it already had. These UserDefaults keys exist only so the
-    /// panel can show a remaining-time label immediately, including right
-    /// after launch before the first XPC round trip completes.
-    private func recordManualTimerState(for configuration: FanControlConfiguration) {
+    /// mechanism it already had; the panel's remaining-time label reads that
+    /// live value from `snapshot.endsAt`, not from these UserDefaults keys.
+    /// What these keys are actually for: letting `reconcileManualTimerOnLaunch`
+    /// notice a deadline that elapsed while the app was not running, and
+    /// letting `resumePreviousCurveAfterManualExpiry` know what to hand
+    /// control back to once a real, observed expiry happens. Called only
+    /// after the helper has confirmed the override is actually running, so a
+    /// failed apply can never leave a later override inheriting a wrong
+    /// "previous mode".
+    private func recordManualTimerState(for configuration: FanControlConfiguration,
+                                        previousSnapshot: FanControlSnapshot) {
         let defaults = UserDefaults.standard
         guard let seconds = configuration.manualDuration.seconds else {
             clearManualTimerState()
@@ -423,13 +443,23 @@ final class FanControlService: ObservableObject {
         }
         if defaults.object(forKey: DefaultsKey.fanControlManualUntil) == nil {
             // A fresh override: remember what to hand control back to once it
-            // expires. Later tweaks (level, duration) while still in manual
-            // fall into the branch above and must not overwrite this.
+            // expires, using the state from right before this apply. Later
+            // tweaks (level, duration) while still in manual go through this
+            // same function but land here with the key already set, so they
+            // fall into the branch below and must not overwrite this.
             let previous = FanControlPolicy.manualOverridePreviousMode(
-                isCooling: snapshot.isCooling,
-                activeMode: snapshot.configuration?.mode
+                isCooling: previousSnapshot.isCooling,
+                activeMode: previousSnapshot.configuration?.mode
             )
             defaults.set(previous.rawValue, forKey: DefaultsKey.fanControlModeBeforeManual)
+            // The curve editor writes fanControlCurves live as the user drags
+            // points, with no Apply step, so by the time the override expires
+            // that key may no longer match what is actually running. Freeze
+            // the curve that was actually confirmed active instead.
+            if previous == .curve, let curves = previousSnapshot.configuration?.curves,
+               let encoded = FanControlConfiguration.encodeCurves(curves) {
+                defaults.set(encoded, forKey: DefaultsKey.fanControlManualPreviousCurves)
+            }
         }
         defaults.set(Date().addingTimeInterval(seconds).timeIntervalSince1970,
                      forKey: DefaultsKey.fanControlManualUntil)
@@ -439,6 +469,7 @@ final class FanControlService: ObservableObject {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: DefaultsKey.fanControlManualUntil)
         defaults.removeObject(forKey: DefaultsKey.fanControlModeBeforeManual)
+        defaults.removeObject(forKey: DefaultsKey.fanControlManualPreviousCurves)
     }
 
     /// Called once a response reports the manual session ended on its own
@@ -450,9 +481,15 @@ final class FanControlService: ObservableObject {
         let defaults = UserDefaults.standard
         let previousMode = (defaults.string(forKey: DefaultsKey.fanControlModeBeforeManual))
             .flatMap(FanControlMode.init(rawValue:))
-        guard FanControlPolicy.modeAfterManualExpiry(previousMode: previousMode) == .curve,
-              let curvesStorage = defaults.string(forKey: DefaultsKey.fanControlCurves),
-              let curves = FanControlConfiguration.decodeCurves(curvesStorage) else {
+        guard FanControlPolicy.modeAfterManualExpiry(previousMode: previousMode) == .curve else {
+            return false
+        }
+        // Prefer the curve frozen when the override began, since the editor
+        // may have since changed fanControlCurves without an Apply; fall back
+        // to the current stored curves only if that snapshot is missing.
+        let storage = defaults.string(forKey: DefaultsKey.fanControlManualPreviousCurves)
+            ?? defaults.string(forKey: DefaultsKey.fanControlCurves)
+        guard let storage, let curves = FanControlConfiguration.decodeCurves(storage) else {
             return false
         }
         clearManualTimerState()
