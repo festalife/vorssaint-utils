@@ -98,6 +98,18 @@ final class WindowLayoutService: ObservableObject {
     private struct LinkedResizeObservation {
         let observer: AXObserver
         let window: AXUIElement
+        /// The application element the same `observer` is also registered
+        /// against, kept only to remove that registration later —
+        /// `kAXWindowResizedNotification`/`kAXWindowMovedNotification` (spec
+        /// says "at the end of the window move/resize") are, per Apple's
+        /// own header comments, the pair standard AppKit windows (TextEdit
+        /// included) actually post reliably; `kAXResizedNotification`/
+        /// `kAXMovedNotification` on the window element itself are also
+        /// registered below since a few apps do use them, but on their own
+        /// they never fired for an ordinary Cocoa window in testing — this
+        /// was the reason linked resize never reacted to a real drag at
+        /// all.
+        let app: AXUIElement
         /// Recorded so a notification, and every later read, can be
         /// rejected the moment it turns out to belong to a different
         /// process — `CGWindowID` values are reused by the window server,
@@ -1481,17 +1493,28 @@ final class WindowLayoutService: ObservableObject {
               let observer = observerRef else { return }
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
+        // Registered on the window element: some apps do post these for
+        // geometry changes, but an ordinary Cocoa window (TextEdit
+        // included) generally does not — kept as a defensive extra, not
+        // the primary signal.
         let addedResized = AXObserverAddNotification(observer, axWindow,
                                                       kAXResizedNotification as CFString, refcon) == .success
         let addedMoved = AXObserverAddNotification(observer, axWindow,
                                                     kAXMovedNotification as CFString, refcon) == .success
-        // Both notifications matter (a move must still be told apart from a
-        // resize once it arrives, see `SnapLinkedResizeSupport`), but even
-        // one landing means the observer is worth keeping.
-        guard addedResized || addedMoved else { return }
+        // Registered on the *application* element: per Apple's own header
+        // comments these are posted "at the end of the window move/resize"
+        // with the resized/moved window as the notification's element —
+        // this is the pair standard AppKit windows actually post, and the
+        // one that matters for a real drag or an external AX write to be
+        // noticed at all.
+        let addedWindowResized = AXObserverAddNotification(observer, axApp,
+                                                            kAXWindowResizedNotification as CFString, refcon) == .success
+        let addedWindowMoved = AXObserverAddNotification(observer, axApp,
+                                                          kAXWindowMovedNotification as CFString, refcon) == .success
+        guard addedResized || addedMoved || addedWindowResized || addedWindowMoved else { return }
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
-        linkedResizeObservers[windowID] = LinkedResizeObservation(observer: observer, window: axWindow, pid: pid)
+        linkedResizeObservers[windowID] = LinkedResizeObservation(observer: observer, window: axWindow, app: axApp, pid: pid)
     }
 
     private func stopWatchingLinkedResize(_ windowID: CGWindowID) {
@@ -1499,6 +1522,8 @@ final class WindowLayoutService: ObservableObject {
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observation.observer), .commonModes)
         AXObserverRemoveNotification(observation.observer, observation.window, kAXResizedNotification as CFString)
         AXObserverRemoveNotification(observation.observer, observation.window, kAXMovedNotification as CFString)
+        AXObserverRemoveNotification(observation.observer, observation.app, kAXWindowResizedNotification as CFString)
+        AXObserverRemoveNotification(observation.observer, observation.app, kAXWindowMovedNotification as CFString)
         linkedResizePendingWindows.remove(windowID)
         linkedResizeSelfInitiated.removeValue(forKey: windowID)
     }
