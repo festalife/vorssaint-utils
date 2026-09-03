@@ -7,6 +7,7 @@ import Carbon.HIToolbox
 import Combine
 import CoreGraphics
 import QuartzCore
+import os.log
 
 enum WindowLayoutError: Equatable {
     case missingAccessibility
@@ -517,19 +518,57 @@ final class WindowLayoutService: ObservableObject {
         }
         guard !group.members.isEmpty else { return theoreticalZone }
 
+        let liveFrames = currentFrames(for: group, on: screen)
         let result = SnapGroupSupport.freeSpace(for: action,
                                                 theoreticalZone: theoreticalZone,
                                                 group: group,
                                                 gap: WindowLayoutGaps.windowGap,
-                                                currentFrames: currentFrames(for: group, on: screen))
+                                                currentFrames: liveFrames)
         // freeSpace() already falls back to theoreticalZone under its own
         // minimum, but a defensive check costs nothing and keeps a
         // degenerate rect (a bad Accessibility read producing NaN or an
         // inverted size) from ever reaching a preview or setFrame.
         guard result.width.isFinite, result.height.isFinite,
               result.width > 0, result.height > 0
-        else { return theoreticalZone }
+        else {
+            logSnapGroup(action: action, theoreticalZone: theoreticalZone, group: group,
+                        liveFrames: liveFrames, result: theoreticalZone, discarded: result)
+            return theoreticalZone
+        }
+        logSnapGroup(action: action, theoreticalZone: theoreticalZone, group: group,
+                    liveFrames: liveFrames, result: result, discarded: nil)
         return result
+    }
+
+    /// Field diagnosis channel for the free-space computation above, silent
+    /// unless `VORSSAINT_SNAP_LOG=1` is set in the environment — this path
+    /// runs on every drag sample once a group exists, so it stays off by
+    /// default rather than adding unified-log volume for everyone. Prints
+    /// exactly what `freeSpaceAdjusted` decided from: every member's
+    /// recorded zone, its live frame read this call, and the free rect
+    /// (or, if discarded as degenerate, what it would have been) — enough
+    /// to tell, from a `log stream` capture alone, whether a specific
+    /// neighbour was even considered without needing a debugger attached.
+    private static let snapGroupLogEnabled = ProcessInfo.processInfo.environment["VORSSAINT_SNAP_LOG"] == "1"
+    private static let snapGroupLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "vorssaint",
+                                             category: "snapGroup")
+
+    private func logSnapGroup(action: WindowLayoutAction,
+                              theoreticalZone: CGRect,
+                              group: SnapGroup,
+                              liveFrames: [CGWindowID: CGRect],
+                              result: CGRect,
+                              discarded: CGRect?) {
+        guard Self.snapGroupLogEnabled else { return }
+        let members = group.members.map { member -> String in
+            let live = liveFrames[member.windowID].map { String(describing: $0) } ?? "no live frame"
+            return "  windowID=\(member.windowID) action=\(member.action) zone=\(String(describing: member.frame)) live=\(live)"
+        }.joined(separator: "\n")
+        let discardedNote = discarded.map { " (discarded degenerate rect \(String(describing: $0)), fell back to theoretical)" } ?? ""
+        let summary = "freeSpace for=\(action) theoreticalZone=\(String(describing: theoreticalZone))"
+            + " -> \(String(describing: result))\(discardedNote)\n"
+            + (members.isEmpty ? "  (no members)" : members)
+        Self.snapGroupLog.debug("\(summary, privacy: .public)")
     }
 
     /// Prunes `group` against Accessibility read right now and, if that
@@ -537,7 +576,9 @@ final class WindowLayoutService: ObservableObject {
     /// so a member that closed or drifted off its zone is forgotten once,
     /// not re-resolved (and re-failed) on the next sample or placement.
     private func prunedGroup(_ group: SnapGroup, on screen: NSScreen) -> SnapGroup {
-        let pruned = SnapGroupSupport.pruned(group: group, currentFrames: currentFrames(for: group, on: screen))
+        let pruned = SnapGroupSupport.pruned(group: group,
+                                             currentFrames: currentFrames(for: group, on: screen),
+                                             gap: WindowLayoutGaps.windowGap)
         guard pruned.members.count != group.members.count else { return group }
         if pruned.members.isEmpty {
             snapGroups.removeValue(forKey: screen.displayID)
@@ -582,7 +623,8 @@ final class WindowLayoutService: ObservableObject {
                                                windowID: windowID,
                                                action: action,
                                                appliedFrame: appliedRect,
-                                               currentFrames: currentFrames(for: group, on: screen))
+                                               currentFrames: currentFrames(for: group, on: screen),
+                                               gap: WindowLayoutGaps.windowGap)
         if updated.members.isEmpty {
             snapGroups.removeValue(forKey: screen.displayID)
         } else {
