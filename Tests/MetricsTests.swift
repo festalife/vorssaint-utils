@@ -6753,6 +6753,66 @@ struct MetricsTests {
                "a neighbour already at its minimum width gives no ground at all: the resized window is " +
                "pulled all the way back to its original frame, and the neighbour gets no adjustment")
 
+        // Real-Mac regression: a multi-step drag of B's left edge
+        // (756 -> 728 -> 705 -> ... -> 598, ids and numbers straight from
+        // the unified log) used to stop moving A after the very first step,
+        // because the caller (WindowLayoutService) wrote the neighbour's
+        // *live* result back into its stored zone while the resized
+        // window's own zone — only ever touched on an explicit pushback,
+        // never on an ordinary unclamped step — stayed behind, and the two
+        // zones drifted out of the flush relationship `touchingEdges`
+        // checks. The fix is entirely in the caller: a member's `frame` in
+        // `group` is its zone, fixed at the moment it joined, and must
+        // never be updated by a linked resize — so this fixture keeps both
+        // zones frozen for the whole sequence below, exactly as
+        // `WindowLayoutService` now does, and only `currentFrames` advances
+        // between steps (the caller's live re-read after each write
+        // actually landed on screen).
+        let slrRealZoneA = CGRect(x: 0, y: 0, width: 756, height: 949)
+        let slrRealZoneB = CGRect(x: 756, y: 0, width: 756, height: 949)
+        let slrRealMemberA = SnapGroupMember(windowID: 12824, action: .leftHalf, frame: slrRealZoneA)
+        let slrRealMemberB = SnapGroupMember(windowID: 12826, action: .rightHalf, frame: slrRealZoneB)
+        let slrRealGroup = SnapGroup(screenID: 1, members: [slrRealMemberA, slrRealMemberB])
+        let slrRealScreenMaxX: CGFloat = 1512
+        var slrRealLiveA = slrRealZoneA
+        for targetMinX: CGFloat in [728, 705, 689, 669, 653, 638, 618, 598] {
+            let stepNewFrame = CGRect(x: targetMinX, y: 0,
+                                      width: slrRealScreenMaxX - targetMinX, height: 949)
+            let stepAdjustments = SnapLinkedResizeSupport.adjustments(
+                resizedWindowID: 12826,
+                // `oldFrame` is always B's frozen zone here, matching what
+                // `processLinkedResize` now always passes (`resizedMember
+                // .frame`, never rewritten by a prior step) — not B's live
+                // frame before this particular step.
+                oldFrame: slrRealZoneB, newFrame: stepNewFrame,
+                group: slrRealGroup, gap: 0,
+                currentFrames: [12824: slrRealLiveA, 12826: stepNewFrame],
+                minimumSize: slrNoMinimum)
+            let expectedA = CGRect(x: 0, y: 0, width: targetMinX, height: 949)
+            expect(stepAdjustments == [.init(windowID: 12824, frame: expectedA)],
+                   "dragging B's left edge to \(targetMinX) moves A to width \(targetMinX), " +
+                   "even though both members' zones never move from their original 756/756 split")
+            slrRealLiveA = expectedA
+        }
+
+        // Once the drag settles, an *external* AX resize of A (not a linked
+        // resize of B) must still find B as a touching neighbour — using
+        // the same permanently frozen zones — and shrink B by exactly the
+        // amount A grew into it, using B's true live frame (914 wide, from
+        // the drag above) as the base, not B's zone.
+        let slrRealAExternalResize = CGRect(x: 0, y: 0, width: 850, height: 949)
+        let slrRealBLiveAfterDrag = CGRect(x: 598, y: 0, width: 914, height: 949)
+        let slrRealAResizeAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 12824,
+            oldFrame: slrRealZoneA, newFrame: slrRealAExternalResize,
+            group: slrRealGroup, gap: 0,
+            currentFrames: [12824: slrRealAExternalResize, 12826: slrRealBLiveAfterDrag],
+            minimumSize: slrNoMinimum)
+        expect(slrRealAResizeAdjustments == [.init(windowID: 12826,
+                                                    frame: CGRect(x: 850, y: 0, width: 662, height: 949))],
+               "resizing A directly afterwards still finds B touching through the same frozen zones, and " +
+               "shrinks B's true 914pt-wide live frame down to 662pt — B's stored zone never entered into it")
+
         // MARK: Window move and resize gestures
 
         expect(WindowGestureSupport.modifiers(from: nil) == [.control, .command],

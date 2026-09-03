@@ -1767,14 +1767,30 @@ final class WindowLayoutService: ObservableObject {
                                      group: group)
     }
 
-    /// Writes every adjustment's frame, records the actual result — which
-    /// Accessibility can shrink further than requested when an app enforces
-    /// its own minimum size, something Accessibility has no attribute to
-    /// query in advance — into the Snap Group's stored zones, and, only
-    /// when a neighbour's actual size came back smaller than requested,
-    /// runs one corrective pass that pulls the resized window's own edge
-    /// back to match, so the two frames end up flush rather than
-    /// overlapping (spec §6: "the divider stops at the minimum").
+    /// Writes every adjustment's frame, then, only when a neighbour's actual
+    /// size came back smaller than requested (Accessibility can shrink
+    /// further than requested when an app enforces its own minimum size,
+    /// something Accessibility has no attribute to query in advance), runs
+    /// one corrective pass that pulls the resized window's own edge back to
+    /// match, so the two frames end up flush rather than overlapping (spec
+    /// §6: "the divider stops at the minimum").
+    ///
+    /// Deliberately never touches `snapGroups[group.screenID]`: a member's
+    /// stored `frame` is its *zone* — fixed at the moment it joined the
+    /// group, exactly as `SnapGroupSupport`/`SnapLinkedResizeSupport`
+    /// document and rely on for every adjacency decision — and a linked
+    /// resize is not a placement, so it must never touch it. Writing the
+    /// live result back in here used to be exactly the bug: after the
+    /// first step of a resize drag rewrote the *neighbour's* stored zone to
+    /// its new live size while the *resized* window's own stored zone (only
+    /// ever written when a pushback happened to occur) stayed behind, the
+    /// two members' zones silently drifted out of the flush relationship
+    /// `touchingEdges` checks, and every following step in the same drag
+    /// read "not touching" and did nothing. Every caller that needs a
+    /// member's *current* boundary already re-reads it live via
+    /// Accessibility at the moment it needs it (`currentFrames`,
+    /// `rawCurrentFrames`) — the zone was never the right place to keep
+    /// that up to date.
     private func applyLinkedResizeAdjustments(_ adjustments: [SnapLinkedResizeSupport.Adjustment],
                                               resizedWindowID: CGWindowID,
                                               oldFrame: CGRect,
@@ -1788,14 +1804,6 @@ final class WindowLayoutService: ObservableObject {
         let budgetDeadline = ProcessInfo.processInfo.systemUptime + Self.linkedResizeApplyBudget
         let appliedFrames = writeAdjustments(adjustments, deadline: budgetDeadline)
 
-        var finalGroup = group
-        for adjustment in adjustments {
-            guard let actual = appliedFrames[adjustment.windowID],
-                  let index = finalGroup.members.firstIndex(where: { $0.windowID == adjustment.windowID })
-            else { continue }
-            finalGroup.members[index].frame = actual
-        }
-
         var discoveredMinimums: [CGWindowID: CGSize] = [:]
         for adjustment in adjustments where adjustment.windowID != resizedWindowID {
             guard let actual = appliedFrames[adjustment.windowID],
@@ -1805,28 +1813,20 @@ final class WindowLayoutService: ObservableObject {
             discoveredMinimums[adjustment.windowID] = actual.size
         }
 
-        if !discoveredMinimums.isEmpty {
-            var liveFrames = appliedFrames
-            liveFrames[resizedWindowID] = newFrame
-            let corrected = SnapLinkedResizeSupport.adjustments(
-                resizedWindowID: resizedWindowID,
-                oldFrame: oldFrame,
-                newFrame: newFrame,
-                group: group,
-                gap: WindowLayoutGaps.windowGap,
-                currentFrames: liveFrames,
-                minimumSize: { discoveredMinimums[$0] ?? Self.linkedResizeMinimumSizeGuess })
-            if ProcessInfo.processInfo.systemUptime < budgetDeadline {
-                for adjustment in corrected where adjustment.windowID == resizedWindowID {
-                    guard let actual = writeLinkedResizeFrame(adjustment.frame, windowID: resizedWindowID),
-                          let index = finalGroup.members.firstIndex(where: { $0.windowID == resizedWindowID })
-                    else { continue }
-                    finalGroup.members[index].frame = actual
-                }
-            }
+        guard !discoveredMinimums.isEmpty, ProcessInfo.processInfo.systemUptime < budgetDeadline else { return }
+        var liveFrames = appliedFrames
+        liveFrames[resizedWindowID] = newFrame
+        let corrected = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: resizedWindowID,
+            oldFrame: oldFrame,
+            newFrame: newFrame,
+            group: group,
+            gap: WindowLayoutGaps.windowGap,
+            currentFrames: liveFrames,
+            minimumSize: { discoveredMinimums[$0] ?? Self.linkedResizeMinimumSizeGuess })
+        for adjustment in corrected where adjustment.windowID == resizedWindowID {
+            writeLinkedResizeFrame(adjustment.frame, windowID: resizedWindowID)
         }
-
-        snapGroups[group.screenID] = finalGroup
     }
 
     /// Writes every adjustment's frame in order, stopping — without writing

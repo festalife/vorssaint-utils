@@ -101,7 +101,22 @@ enum SnapLinkedResizeSupport {
     /// the two — the two tests are meant to keep agreeing by staying
     /// identical in behavior, not by sharing code) — never to size
     /// anything, so the two features can never disagree about which windows
-    /// are neighbours. `currentFrames` supplies every member's
+    /// are neighbours.
+    ///
+    /// **The caller must never update a member's zone as a result of a
+    /// linked resize — only a fresh placement may.** A zone is "fixed at
+    /// the moment it joined the group" by contract (see
+    /// `SnapGroupMember.frame`'s own doc comment); this function relies on
+    /// that holding for *every* member on *every* call, resized window
+    /// included, not only for the ones it happens to return an `Adjustment`
+    /// for. A real regression looked exactly like this: the caller wrote a
+    /// neighbour's live result back into its stored zone after a
+    /// successful step, but the resized window's own zone was only ever
+    /// touched on an explicit pushback (rare) — so after one ordinary,
+    /// unclamped step the two zones silently drifted out of the flush
+    /// relationship `touchingEdges` checks, and `adjustments` correctly,
+    /// uselessly, reported "not touching" on every following step of the
+    /// same drag. `currentFrames` supplies every member's
     /// *live* frame, which is what actually gets resized; the resized
     /// window's own live frame is `newFrame`, not whatever `currentFrames`
     /// might also hold for it. A member missing from `currentFrames`
