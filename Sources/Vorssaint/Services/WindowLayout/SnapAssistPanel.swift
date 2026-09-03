@@ -30,13 +30,24 @@ private final class KeyableSnapAssistPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+/// `acceptsFirstMouse` on the whole content view, in addition to
+/// `SnapAssistCardClickCatcher`'s own override on each card: belt and
+/// suspenders for the same "non-activating, momentarily-not-key panel"
+/// class of first-click loss every other genuinely clickable panel in this
+/// codebase (`CommandBarView`, `ClipboardHistoryService`,
+/// `ScratchpadView`, `ShelfTilesView`, …) already guards against on
+/// whichever of their subviews actually receives the click.
+private final class SnapAssistHostingView: NSHostingView<SnapAssistPanelView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// Owns the floating Snap Assist overlay on `WindowLayoutService`'s behalf
 /// (spec §4): a dark translucent surface covering the free zone a snap just
 /// left, filled with thumbnails of the other open windows. Unlike
 /// `SnapLayoutsPanel` — which only ever draws a highlight while the existing
 /// drag tap tracks hover and release — this panel is genuinely clickable:
-/// there is no drag in progress once a placement has already landed, so a
-/// card's own `Button` handles the pick directly.
+/// there is no drag in progress once a placement has already landed, so
+/// each card's own `SnapAssistCardClickCatcher` handles the pick directly.
 final class SnapAssistPanel {
     private var panel: KeyableSnapAssistPanel?
     private let state = SnapAssistPanelState()
@@ -188,7 +199,9 @@ final class SnapAssistPanel {
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.animationBehavior = .none
-        panel.contentViewController = NSHostingController(rootView: SnapAssistPanelView(state: state))
+        let hostingView = SnapAssistHostingView(rootView: SnapAssistPanelView(state: state))
+        hostingView.autoresizingMask = [.width, .height]
+        panel.contentView = hostingView
         self.panel = panel
         return panel
     }
@@ -205,7 +218,7 @@ final class SnapAssistPanel {
     private func installMonitors(for panel: NSPanel) {
         removeMonitors()
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak panel] event in
-            guard let self, let panel, event.window === panel else { return event }
+            guard let self, let panel, panel.isKeyWindow else { return event }
             self.resetDismissTimer()
             if event.keyCode == UInt16(kVK_Escape) {
                 self.hide()
@@ -213,12 +226,22 @@ final class SnapAssistPanel {
             }
             return event
         }
+        // Geometric containment, not `event.window === panel`: a click
+        // physically over the panel is what matters, and checking identity
+        // against `.window` instead was found, on a real Mac, to treat a
+        // genuine click on a card as "outside" — closing the overlay before
+        // the click ever reached the card underneath (`event.window` is not
+        // dependable for every path an event can take to a borderless,
+        // non-activating panel's own subviews). `NSEvent.mouseLocation` is
+        // the authoritative screen position for a local monitor's own event
+        // regardless of which window AppKit happens to have attributed it
+        // to.
         let mouseEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents) { [weak self, weak panel] event in
             guard let self, let panel, panel.isVisible else { return event }
-            if event.window === panel {
+            if Self.mouseIsInside(panel) {
                 self.resetDismissTimer()
-            } else if !Self.mouseIsInside(panel) {
+            } else {
                 self.hide()
             }
             return event

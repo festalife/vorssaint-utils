@@ -798,7 +798,17 @@ final class WindowLayoutService: ObservableObject {
     /// same Accessibility/session gates every other Window Layout surface
     /// checks before touching AX or opening a panel.
     private var snapAssistEnabled: Bool {
-        AppFeature.windowLayout.isAvailable
+        // `synchronize()` is deprecated, but still the one reliable nudge
+        // to fold in a value another process just wrote (`defaults write`,
+        // used to flip this key live during testing without a relaunch):
+        // every other Window Layout toggle is only ever changed in-process,
+        // through this same app's own Settings UI, so `UserDefaults`'s
+        // in-memory copy is never behind for them, and none of them needed
+        // this. This is the one read on a path exercised every time a
+        // partial-zone placement lands, so the cost of asking is bounded to
+        // exactly the moments it can matter.
+        UserDefaults.standard.synchronize()
+        return AppFeature.windowLayout.isAvailable
             && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapAssistEnabled)
             && AXIsProcessTrusted()
     }
