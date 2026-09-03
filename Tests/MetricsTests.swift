@@ -14168,6 +14168,49 @@ struct MetricsTests {
                 && FanControlPolicy.interpolatedCoolingLevel(points: defaultCurve.points,
                                                              temperature: 80) == 100,
                "the default curve starts at 50 degrees, reaches maximum at 70 and rounds safely up")
+
+        expect(FanControlPolicy.sessionDuration(for: .manual(level: 60)) == nil
+                && FanControlPolicy.sessionDuration(for: .manual(level: 60, duration: .untilChanged)) == nil
+                && FanControlPolicy.sessionDuration(for: .manual(level: 60, duration: .fifteenMinutes)) == 15 * 60
+                && FanControlPolicy.sessionDuration(for: .manual(level: 60, duration: .thirtyMinutes)) == 30 * 60
+                && FanControlPolicy.sessionDuration(for: .manual(level: 60, duration: .oneHour)) == 60 * 60
+                && FanControlPolicy.sessionDuration(for: .manual(level: 60, duration: .twoHours)) == 2 * 60 * 60
+                && FanControlPolicy.sessionDuration(for: .manual(level: 60, duration: .fourHours)) == 4 * 60 * 60
+                && FanControlPolicy.sessionDuration(for: .curve([defaultCurve])) == nil,
+               "only a finite manual duration produces a session deadline; curve mode never expires on its own")
+        expect(FanControlPolicy.validConfiguration(.manual(level: 50, duration: .fifteenMinutes))
+                && FanControlPolicy.validConfiguration(.manual(level: 50, duration: .untilChanged)),
+               "a manual duration choice never affects whether the configuration is valid")
+
+        let manualDeadline = Date(timeIntervalSince1970: 10_000)
+        expect(FanControlPolicy.manualDurationElapsed(until: manualDeadline,
+                                                       now: manualDeadline) == true
+                && FanControlPolicy.manualDurationElapsed(until: manualDeadline,
+                                                          now: manualDeadline.addingTimeInterval(1)) == true
+                && FanControlPolicy.manualDurationElapsed(until: manualDeadline,
+                                                          now: manualDeadline.addingTimeInterval(-1)) == false,
+               "a manual session is considered elapsed exactly at, and after, its deadline")
+        expect(FanControlPolicy.remainingManualMinutes(until: nil, now: manualDeadline) == nil
+                && FanControlPolicy.remainingManualMinutes(until: manualDeadline, now: manualDeadline) == nil
+                && FanControlPolicy.remainingManualMinutes(
+                    until: manualDeadline.addingTimeInterval(1), now: manualDeadline) == 1
+                && FanControlPolicy.remainingManualMinutes(
+                    until: manualDeadline.addingTimeInterval(90), now: manualDeadline) == 2
+                && FanControlPolicy.remainingManualMinutes(
+                    until: manualDeadline.addingTimeInterval(600), now: manualDeadline) == 10,
+               "remaining minutes rounds up so the label never claims zero minutes while control is still active")
+
+        expect(FanControlPolicy.modeAfterManualExpiry(previousMode: .curve) == .curve
+                && FanControlPolicy.modeAfterManualExpiry(previousMode: .system) == .system
+                && FanControlPolicy.modeAfterManualExpiry(previousMode: .manual) == .system
+                && FanControlPolicy.modeAfterManualExpiry(previousMode: nil) == .system,
+               "a timed manual override resumes the curve it interrupted, or otherwise system control")
+        expect(FanControlPolicy.manualOverridePreviousMode(isCooling: true, activeMode: .curve) == .curve
+                && FanControlPolicy.manualOverridePreviousMode(isCooling: true, activeMode: .system) == .system
+                && FanControlPolicy.manualOverridePreviousMode(isCooling: false, activeMode: .curve) == .system
+                && FanControlPolicy.manualOverridePreviousMode(isCooling: true, activeMode: nil) == .system,
+               "a manual override only remembers curve as its previous mode when a curve was actually running")
+
         let coolingTemperature = [
             FanControlTemperatureReading(source: .hottestSoC, celsius: 59),
         ]
@@ -14346,7 +14389,7 @@ struct MetricsTests {
         for language in AppLanguage.allCases {
             let strings = FeatureStrings.fanControl(language)
             let values = Mirror(reflecting: strings).children.compactMap { $0.value as? String }
-            expect(values.count == 42 && values.allSatisfy { !$0.isEmpty },
+            expect(values.count == 50 && values.allSatisfy { !$0.isEmpty },
                    "fan control has every localized field for \(language.rawValue)")
             expect(values.allSatisfy { !$0.contains("—") },
                    "fan control text uses human punctuation for \(language.rawValue)")
@@ -14358,6 +14401,12 @@ struct MetricsTests {
                          "current fan speed format stays valid for \(language.rawValue)")
             expectFormat(strings.targetRPMFormat, ["d"],
                          "target fan speed format stays valid for \(language.rawValue)")
+            expectFormat(strings.minutesRemainingFormat, ["d"],
+                         "manual duration remaining format stays valid for \(language.rawValue)")
+            for option in FanControlManualDuration.allCases {
+                expect(!strings.durationLabel(for: option).isEmpty,
+                       "manual duration \(option.rawValue) has a label for \(language.rawValue)")
+            }
         }
         expect(FanControlFeatureStrings.ru.rpmFormat == "%d об/мин"
                 && FanControlFeatureStrings.de.rpmFormat == "%d U/min"
