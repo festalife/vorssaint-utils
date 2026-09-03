@@ -11,6 +11,8 @@ struct FanControlSection: View {
         FanControlPolicy.defaultCoolingLevel
     @AppStorage(DefaultsKey.fanControlCurves) private var curvesStorage =
         FanControlConfiguration.defaultCurvesStorage
+    @AppStorage(DefaultsKey.fanControlManualDuration) private var manualDurationRaw =
+        FanControlManualDuration.untilChanged.rawValue
     @AppStorage(DefaultsKey.temperatureUnit) private var temperatureUnit =
         TemperatureUnit.celsius.rawValue
     var collapsible = true
@@ -29,6 +31,7 @@ struct FanControlSection: View {
                                   isWorking: service.isWorking,
                                   mode: modeBinding,
                                   coolingLevel: $coolingLevel,
+                                  manualDuration: manualDurationBinding,
                                   curves: curvesBinding,
                                   temperatureUnit: displayTemperatureUnit,
                                   authorize: service.authorize,
@@ -44,6 +47,13 @@ struct FanControlSection: View {
         Binding(
             get: { FanControlMode(rawValue: modeRaw) ?? .system },
             set: { modeRaw = $0.rawValue }
+        )
+    }
+
+    private var manualDurationBinding: Binding<FanControlManualDuration> {
+        Binding(
+            get: { FanControlManualDuration(rawValue: manualDurationRaw) ?? .untilChanged },
+            set: { manualDurationRaw = $0.rawValue }
         )
     }
 
@@ -75,6 +85,7 @@ struct FanControlCardContent: View {
     let isWorking: Bool
     @Binding var mode: FanControlMode
     @Binding var coolingLevel: Int
+    @Binding var manualDuration: FanControlManualDuration
     @Binding var curves: [FanControlCurve]
     let temperatureUnit: TemperatureUnit
     let authorize: () -> Void
@@ -153,7 +164,52 @@ struct FanControlCardContent: View {
                    step: Double(FanControlPolicy.coolingLevelStep))
                 .controlSize(.small)
                 .disabled(isWorking)
+
+            HStack {
+                Text(strings.duration)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker(strings.duration, selection: $manualDuration) {
+                    ForEach(FanControlManualDuration.allCases) { option in
+                        Text(strings.durationLabel(for: option)).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .disabled(isWorking)
+                .fixedSize()
+            }
+
+            if isManualSessionActive {
+                HStack {
+                    if let remainingMinutes {
+                        Text(String(format: strings.minutesRemainingFormat, remainingMinutes))
+                            .font(.system(size: 9.5).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(strings.returnToSystem, action: stopCooling)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .disabled(isWorking)
+                }
+            }
         }
+    }
+
+    /// A manual session considered "active" for the quick return-to-automatic
+    /// control, independent of whichever mode the picker currently shows —
+    /// flipping the segmented control back to System should not be the only
+    /// way to cancel a running manual override.
+    private var isManualSessionActive: Bool {
+        snapshot.isCooling && snapshot.configuration?.mode == .manual
+    }
+
+    private var remainingMinutes: Int? {
+        FanControlPolicy.remainingManualMinutes(until: snapshot.endsAt, now: Date())
     }
 
     private var statusHeader: some View {
@@ -238,7 +294,7 @@ struct FanControlCardContent: View {
             case .manual:
                 Button(strings.applyManual) {
                     coolingLevel = selectedCoolingLevel
-                    applyConfiguration(.manual(level: selectedCoolingLevel))
+                    applyConfiguration(.manual(level: selectedCoolingLevel, duration: manualDuration))
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -263,7 +319,9 @@ struct FanControlCardContent: View {
         case .system:
             return strings.systemControl
         case .manual:
-            return "\(strings.manualControl) · \(level)%"
+            let base = "\(strings.manualControl) · \(level)%"
+            guard let remainingMinutes else { return base }
+            return "\(base) · \(String(format: strings.minutesRemainingFormat, remainingMinutes))"
         case .curve:
             let activeCurves = snapshot.configuration?.curves ?? []
             let temperature = activeCurves.count == 1

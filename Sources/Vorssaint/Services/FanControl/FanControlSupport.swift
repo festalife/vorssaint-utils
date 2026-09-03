@@ -20,6 +20,35 @@ enum FanControlMode: String, Codable, Sendable {
     case curve
 }
 
+/// How long a manual-mode session runs before it reverts on its own.
+/// `untilChanged` means no automatic expiry, matching the behavior manual
+/// mode already had before this type existed. The helper is the only thing
+/// that enforces this (see `FanControlPolicy.sessionDuration` and the
+/// `endsAt`/watchdog mechanism it already had for the legacy fixed session),
+/// so picking a case here never needs a second, app-side timer.
+enum FanControlManualDuration: String, Codable, CaseIterable, Identifiable, Sendable {
+    case fifteenMinutes
+    case thirtyMinutes
+    case oneHour
+    case twoHours
+    case fourHours
+    case untilChanged
+
+    var id: String { rawValue }
+
+    /// `nil` means no automatic expiry.
+    var seconds: TimeInterval? {
+        switch self {
+        case .fifteenMinutes: return 15 * 60
+        case .thirtyMinutes: return 30 * 60
+        case .oneHour: return 60 * 60
+        case .twoHours: return 2 * 60 * 60
+        case .fourHours: return 4 * 60 * 60
+        case .untilChanged: return nil
+        }
+    }
+}
+
 enum FanControlTemperatureSource: String, Codable, CaseIterable, Identifiable, Sendable {
     case averageSoC
     case hottestSoC
@@ -49,6 +78,8 @@ struct FanControlConfiguration: Codable, Equatable, Sendable {
     var mode: FanControlMode
     var manualLevel: Int
     var curves: [FanControlCurve]
+    /// Only meaningful in `.manual` mode; ignored otherwise.
+    var manualDuration: FanControlManualDuration
 
     static let defaultCurve = FanControlCurve(
         sensor: .hottestSoC,
@@ -58,15 +89,16 @@ struct FanControlConfiguration: Codable, Equatable, Sendable {
         ]
     )
 
-    static func manual(level: Int) -> FanControlConfiguration {
+    static func manual(level: Int,
+                       duration: FanControlManualDuration = .untilChanged) -> FanControlConfiguration {
         FanControlConfiguration(mode: .manual, manualLevel: level,
-                                curves: [])
+                                curves: [], manualDuration: duration)
     }
 
     static func curve(_ curves: [FanControlCurve]) -> FanControlConfiguration {
         FanControlConfiguration(mode: .curve,
                                 manualLevel: FanControlPolicy.defaultCoolingLevel,
-                                curves: curves)
+                                curves: curves, manualDuration: .untilChanged)
     }
 
     static func encodeCurves(_ curves: [FanControlCurve]) -> String? {
@@ -193,6 +225,43 @@ enum FanControlPolicy {
         guard validBounds(minimum: minimum, maximum: maximum),
               validCoolingLevel(level) else { return nil }
         return minimum + (maximum - minimum) * Double(level) / 100
+    }
+
+    /// The deadline the helper should enforce for a session started with this
+    /// configuration. Only manual mode ever expires on its own; a curve keeps
+    /// running until temperatures or the app say otherwise. Centralizing this
+    /// keeps the app and the helper from independently answering the same
+    /// question and disagreeing.
+    static func sessionDuration(for configuration: FanControlConfiguration) -> TimeInterval? {
+        guard configuration.mode == .manual else { return nil }
+        return configuration.manualDuration.seconds
+    }
+
+    static func manualDurationElapsed(until: Date, now: Date) -> Bool {
+        now >= until
+    }
+
+    /// Minutes left before a manual session's deadline, rounded up so the
+    /// label never reads "0 min left" while control is still active, and
+    /// `nil` once (or before) the deadline to signal there is nothing to show.
+    static func remainingManualMinutes(until: Date?, now: Date) -> Int? {
+        guard let until, until > now else { return nil }
+        return max(1, Int((until.timeIntervalSince(now) / 60).rounded(.up)))
+    }
+
+    /// What a manual override should hand control back to once its timer
+    /// expires: the curve it interrupted, or the system if nothing was
+    /// actively running (or the interrupted mode was already system control).
+    static func modeAfterManualExpiry(previousMode: FanControlMode?) -> FanControlMode {
+        previousMode == .curve ? .curve : .system
+    }
+
+    /// What "previous mode" a timed manual override should remember, captured
+    /// once when the override begins so later tweaks (level, duration) while
+    /// still in manual do not overwrite what it should return to.
+    static func manualOverridePreviousMode(isCooling: Bool,
+                                           activeMode: FanControlMode?) -> FanControlMode {
+        (isCooling && activeMode == .curve) ? .curve : .system
     }
 
     static func validConfiguration(_ configuration: FanControlConfiguration) -> Bool {
