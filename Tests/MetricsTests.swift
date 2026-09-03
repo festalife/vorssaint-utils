@@ -6700,6 +6700,59 @@ struct MetricsTests {
                                                     minimumSize: slrNoMinimum).isEmpty,
                "moving a snapped window without resizing it never links its neighbour")
 
+        // Both X edges moved between two stale reads: A's left edge (no
+        // neighbour there) moves out by 10pt at the same time its right
+        // edge (touching B) moves out by 40pt. Both must be handled — a
+        // stale if/else-if that stopped at the first changed edge would
+        // silently ignore B here.
+        let slrBothXEdgesMoved = CGRect(x: sgLeftZone.minX - 10, y: sgLeftZone.minY,
+                                        width: sgLeftZone.width + 10 + 40, height: sgLeftZone.height)
+        let slrBothXAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrBothXEdgesMoved,
+            group: slrSideGroup, gap: sgGap,
+            currentFrames: [1: slrBothXEdgesMoved, 40: sgRightZone], minimumSize: slrNoMinimum)
+        expect(slrBothXAdjustments == [.init(windowID: 40,
+                                             frame: CGRect(x: sgRightZone.minX + 40, y: sgRightZone.minY,
+                                                           width: sgRightZone.width - 40, height: sgRightZone.height))],
+               "both X edges moving at once is handled independently: the untouched left edge produces no " +
+               "adjustment on its own, but the touching right edge still moves the right neighbour by 40pt")
+
+        // Thirds next to halves: neighbours of deliberately different
+        // widths, so a bug that assumed a symmetric split either side would
+        // still show up.
+        let slrHalfMember = SnapGroupMember(windowID: 60, action: .leftHalf, frame: CGRect(x: 0, y: 0, width: 600, height: 600))
+        let slrThirdMember = SnapGroupMember(windowID: 61, action: .rightThird, frame: CGRect(x: 600, y: 0, width: 400, height: 600))
+        let slrAsymmetricGroup = SnapGroup(screenID: 1, members: [slrHalfMember, slrThirdMember])
+        let slrHalfGrown = CGRect(x: 0, y: 0, width: 640, height: 600)
+        let slrAsymmetricAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 60, oldFrame: slrHalfMember.frame, newFrame: slrHalfGrown,
+            group: slrAsymmetricGroup, gap: 0,
+            currentFrames: [60: slrHalfGrown, 61: slrThirdMember.frame], minimumSize: slrNoMinimum)
+        expect(slrAsymmetricAdjustments == [.init(windowID: 61, frame: CGRect(x: 640, y: 0, width: 360, height: 600))],
+               "a half growing into a narrower third neighbour shrinks it by exactly the same amount, " +
+               "regardless of the two zones starting at different widths")
+
+        // Neighbour that cannot shrink at all: its minimum already equals
+        // its current width, so there is no room to give — the resized
+        // window is pulled back fully, right back to where it started on
+        // that edge, and the neighbour is left completely alone.
+        let slrRigidNeighbourFrame = CGRect(x: 600, y: 0, width: 400, height: 600)
+        let slrRigidMember = SnapGroupMember(windowID: 71, action: .rightHalf, frame: slrRigidNeighbourFrame)
+        let slrRigidResizedFrame = CGRect(x: 0, y: 0, width: 600, height: 600)
+        let slrRigidMemberResized = SnapGroupMember(windowID: 70, action: .leftHalf, frame: slrRigidResizedFrame)
+        let slrRigidGroup = SnapGroup(screenID: 1, members: [slrRigidMemberResized, slrRigidMember])
+        func slrRigidMinimum(_ windowID: CGWindowID) -> CGSize {
+            windowID == 71 ? CGSize(width: 400, height: 1) : CGSize(width: 1, height: 1)
+        }
+        let slrRigidGrown = CGRect(x: 0, y: 0, width: 650, height: 600)
+        let slrRigidAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 70, oldFrame: slrRigidResizedFrame, newFrame: slrRigidGrown,
+            group: slrRigidGroup, gap: 0,
+            currentFrames: [70: slrRigidGrown, 71: slrRigidNeighbourFrame], minimumSize: slrRigidMinimum)
+        expect(slrRigidAdjustments == [.init(windowID: 70, frame: slrRigidResizedFrame)],
+               "a neighbour already at its minimum width gives no ground at all: the resized window is " +
+               "pulled all the way back to its original frame, and the neighbour gets no adjustment")
+
         // MARK: Window move and resize gestures
 
         expect(WindowGestureSupport.modifiers(from: nil) == [.control, .command],

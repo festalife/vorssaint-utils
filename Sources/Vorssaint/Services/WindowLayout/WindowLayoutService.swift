@@ -98,16 +98,30 @@ final class WindowLayoutService: ObservableObject {
     private struct LinkedResizeObservation {
         let observer: AXObserver
         let window: AXUIElement
+        /// Recorded so a notification, and every later read, can be
+        /// rejected the moment it turns out to belong to a different
+        /// process — `CGWindowID` values are reused by the window server,
+        /// so the id alone is not proof this is still the same window.
+        let pid: pid_t
     }
-    /// A window this service just wrote a frame to itself, and when —
-    /// so the resize/move notification that write provokes can be told
-    /// apart from a notification the user's own drag produced, the same
-    /// idea `syntheticEventMarker` above uses for mouse events. Generous on
-    /// purpose: `AXObserver` callbacks can lag a running app by a tick or
-    /// two under load, and mistaking a self-initiated write for a fresh user
-    /// drag is what turns this feature into a feedback loop.
-    private var linkedResizeSelfInitiated: [CGWindowID: TimeInterval] = [:]
-    private let linkedResizeSelfInitiatedWindow: TimeInterval = 0.5
+    /// The exact frame this service last wrote to a window itself, and
+    /// when — so the resize/move notification that write provokes can be
+    /// told apart from a notification a genuine, ongoing user drag
+    /// produced. Comparing a *live-read* frame against this recorded one
+    /// (`isSelfInitiatedEcho`), not a fixed time window, is deliberate: an
+    /// earlier version used a 0.5s window against a 33ms throttle, which
+    /// swallowed every real notification for up to half a second after any
+    /// write this service made — long enough for a 3+-member row to desync
+    /// and only catch up on some later, unrelated event. `at` is kept only
+    /// as a short fallback expiry for the rare case a written frame is
+    /// never read back at all (the window closed mid-write, say), not as
+    /// the primary signal.
+    private var linkedResizeSelfInitiated: [CGWindowID: (frame: CGRect, at: TimeInterval)] = [:]
+    /// ≤ 3 × `linkedResizeThrottleInterval` (1/30s), matching the review
+    /// guidance: long enough to cover one throttled tick plus margin, short
+    /// enough that a marker never meaningfully outlives the write it guards.
+    private let linkedResizeSelfInitiatedFallbackExpiry: TimeInterval = 0.1
+    private let linkedResizeSelfInitiatedFrameTolerance: CGFloat = 2
     /// Members with a linked-resize notification already scheduled but not
     /// yet processed — a resize drag emits many notifications in a burst,
     /// and this coalesces them: further notifications for the same window
@@ -123,6 +137,19 @@ final class WindowLayoutService: ObservableObject {
     /// second pass using whatever size Accessibility actually accepted,
     /// whenever that turns out to be larger.
     private static let linkedResizeMinimumSizeGuess = CGSize(width: 80, height: 80)
+    /// A short per-element Accessibility messaging timeout used only for
+    /// linked-resize member windows — a fan-out of synchronous writes across
+    /// up to four members, each capable of blocking on the system default
+    /// (multiple seconds) if that member's app has hung, could otherwise
+    /// freeze the whole app for the duration of one throttled tick.
+    private static let linkedResizeMessagingTimeout: Float = 0.1
+    /// Hard ceiling on how long one throttled pass may spend writing member
+    /// frames, across both the first pass and the corrective pass —
+    /// bounds the worst case where several members are all slow at once
+    /// (each capped at `linkedResizeMessagingTimeout`) instead of letting
+    /// them add up unbounded. Remaining members are simply left alone for
+    /// this tick; the next notification tries again.
+    private static let linkedResizeApplyBudget: TimeInterval = 0.2
     private var assistiveModeSuspensions: [CGWindowID: EnhancedUserInterfaceSuspension] = [:]
     private var settleTimers: [CGWindowID: Timer] = [:]
     private var gestureAssistiveMode: EnhancedUserInterfaceSuspension?
@@ -1443,6 +1470,11 @@ final class WindowLayoutService: ObservableObject {
         let axApp = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(axApp, 0.35)
         guard let axWindow = axElement(windowID: windowID, in: axApp) else { return }
+        // Every subsequent write/read through this specific element — every
+        // one `writeLinkedResizeFrame` and `processLinkedResize` make — is
+        // bounded by this short timeout, not the system default, which is
+        // what keeps one hung member's app from stalling the main thread.
+        AXUIElementSetMessagingTimeout(axWindow, Self.linkedResizeMessagingTimeout)
 
         var observerRef: AXObserver?
         guard AXObserverCreate(pid, windowLayoutLinkedResizeAXCallback, &observerRef) == .success,
@@ -1459,7 +1491,7 @@ final class WindowLayoutService: ObservableObject {
         guard addedResized || addedMoved else { return }
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
-        linkedResizeObservers[windowID] = LinkedResizeObservation(observer: observer, window: axWindow)
+        linkedResizeObservers[windowID] = LinkedResizeObservation(observer: observer, window: axWindow, pid: pid)
     }
 
     private func stopWatchingLinkedResize(_ windowID: CGWindowID) {
@@ -1473,25 +1505,58 @@ final class WindowLayoutService: ObservableObject {
 
     /// Called from the C observer callback (on the main run loop, since the
     /// observer's run-loop source was added there — no further dispatch
-    /// needed, matching `AutoQuitService.handleAX`).
+    /// needed, matching `AutoQuitService.handleAX`). Verifies the notifying
+    /// element still belongs to the process this service started watching
+    /// before doing anything else: `CGWindowID` values are reused by the
+    /// window server, so a stale observer whose original window closed and
+    /// whose numeric id was handed to an unrelated new window must never be
+    /// allowed to act on that new window's notifications.
     func handleLinkedResizeNotification(element: AXUIElement) {
         guard let windowID = AXWindowResolver.windowID(for: element) else { return }
+        var elementPID: pid_t = 0
+        AXUIElementGetPid(element, &elementPID)
+        guard let observation = linkedResizeObservers[windowID], observation.pid == elementPID else {
+            // Not a window this service is watching under that id, or the
+            // id was recycled since watching started — either way, a stale
+            // entry left over is not worth keeping around either.
+            stopWatchingLinkedResize(windowID)
+            return
+        }
         scheduleLinkedResizeProcessing(windowID: windowID)
     }
 
     /// Coalesces a burst of notifications for one window down to a single
-    /// throttled pass, and drops a notification outright when it is just
-    /// the echo of a frame this service wrote a moment ago.
+    /// throttled pass. The self-initiated echo check happens once, inside
+    /// `processLinkedResize`, against a live-read frame — not here — since
+    /// only a live read can tell an echo of this service's own write apart
+    /// from a genuine new resize that happens to start in the same instant.
     private func scheduleLinkedResizeProcessing(windowID: CGWindowID) {
         guard linkedResizeFeatureAvailable else { return }
-        if let markedAt = linkedResizeSelfInitiated[windowID],
-           ProcessInfo.processInfo.systemUptime - markedAt < linkedResizeSelfInitiatedWindow {
-            return
-        }
         guard linkedResizePendingWindows.insert(windowID).inserted else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + linkedResizeThrottleInterval) { [weak self] in
             self?.processLinkedResize(windowID: windowID)
         }
+    }
+
+    /// Whether `liveFrame` for `windowID` is just the echo of a frame this
+    /// service wrote to it a moment ago, rather than a fresh notification
+    /// from the user's own drag. Frame correlation, not a time window: a
+    /// notification is only ever swallowed when the window's *current*
+    /// geometry still actually matches what was written, within
+    /// `linkedResizeSelfInitiatedFrameTolerance` — a genuine resize that
+    /// starts moments after a linked write (three or more members chained
+    /// together, say) is caught immediately because its live frame no
+    /// longer matches, instead of being silently dropped for however long a
+    /// fixed window happened to be open.
+    private func isSelfInitiatedEcho(windowID: CGWindowID, liveFrame: CGRect) -> Bool {
+        guard let marked = linkedResizeSelfInitiated[windowID],
+              ProcessInfo.processInfo.systemUptime - marked.at < linkedResizeSelfInitiatedFallbackExpiry
+        else { return false }
+        let tolerance = linkedResizeSelfInitiatedFrameTolerance
+        return abs(liveFrame.minX - marked.frame.minX) <= tolerance
+            && abs(liveFrame.minY - marked.frame.minY) <= tolerance
+            && abs(liveFrame.width - marked.frame.width) <= tolerance
+            && abs(liveFrame.height - marked.frame.height) <= tolerance
     }
 
     /// The throttled linked-resize pass: reads `windowID`'s live frame right
@@ -1503,15 +1568,22 @@ final class WindowLayoutService: ObservableObject {
     private func processLinkedResize(windowID: CGWindowID) {
         linkedResizePendingWindows.remove(windowID)
         guard linkedResizeFeatureAvailable else { return }
-        if let markedAt = linkedResizeSelfInitiated[windowID],
-           ProcessInfo.processInfo.systemUptime - markedAt < linkedResizeSelfInitiatedWindow {
+        guard let observation = linkedResizeObservers[windowID] else { return }
+        // The owning app quitting is the one way a member stops existing
+        // without ever posting a notification this service would otherwise
+        // notice — checked before touching Accessibility at all, since a
+        // terminated process is exactly the case a messaging timeout exists
+        // to protect against, not something to spend one on.
+        guard let runningApp = NSRunningApplication(processIdentifier: observation.pid), !runningApp.isTerminated
+        else {
+            stopWatchingLinkedResize(windowID)
             return
         }
-        guard let axWindow = linkedResizeObservers[windowID]?.window,
-              !boolAttribute(axWindow, kAXMinimizedAttribute as String),
-              let liveAXFrame = frame(of: axWindow)
+        guard !boolAttribute(observation.window, kAXMinimizedAttribute as String),
+              let liveAXFrame = frame(of: observation.window)
         else { return }
         let newFrame = appKitFrame(fromAX: liveAXFrame)
+        guard !isSelfInitiatedEcho(windowID: windowID, liveFrame: newFrame) else { return }
 
         guard let group = snapGroups.values.first(where: { grp in grp.members.contains { $0.windowID == windowID } }),
               let resizedMember = group.members.first(where: { $0.windowID == windowID })
@@ -1565,10 +1637,13 @@ final class WindowLayoutService: ObservableObject {
                                               oldFrame: CGRect,
                                               newFrame: CGRect,
                                               group: SnapGroup) {
-        var appliedFrames: [CGWindowID: CGRect] = [:]
-        for adjustment in adjustments {
-            appliedFrames[adjustment.windowID] = writeLinkedResizeFrame(adjustment.frame, windowID: adjustment.windowID)
-        }
+        // One shared deadline for both the first pass below and the
+        // corrective pass further down — each member write is already
+        // capped individually by `linkedResizeMessagingTimeout`, but this
+        // bounds how long several slow members in a row are allowed to add
+        // up to before the rest are simply left for the next tick.
+        let budgetDeadline = ProcessInfo.processInfo.systemUptime + Self.linkedResizeApplyBudget
+        let appliedFrames = writeAdjustments(adjustments, deadline: budgetDeadline)
 
         var finalGroup = group
         for adjustment in adjustments {
@@ -1598,34 +1673,66 @@ final class WindowLayoutService: ObservableObject {
                 gap: WindowLayoutGaps.windowGap,
                 currentFrames: liveFrames,
                 minimumSize: { discoveredMinimums[$0] ?? Self.linkedResizeMinimumSizeGuess })
-            for adjustment in corrected where adjustment.windowID == resizedWindowID {
-                guard let actual = writeLinkedResizeFrame(adjustment.frame, windowID: resizedWindowID),
-                      let index = finalGroup.members.firstIndex(where: { $0.windowID == resizedWindowID })
-                else { continue }
-                finalGroup.members[index].frame = actual
+            if ProcessInfo.processInfo.systemUptime < budgetDeadline {
+                for adjustment in corrected where adjustment.windowID == resizedWindowID {
+                    guard let actual = writeLinkedResizeFrame(adjustment.frame, windowID: resizedWindowID),
+                          let index = finalGroup.members.firstIndex(where: { $0.windowID == resizedWindowID })
+                    else { continue }
+                    finalGroup.members[index].frame = actual
+                }
             }
         }
 
         snapGroups[group.screenID] = finalGroup
     }
 
+    /// Writes every adjustment's frame in order, stopping — without writing
+    /// the rest — the moment `deadline` passes: bounds the worst case where
+    /// several members in a row are all slow (each individually capped at
+    /// `linkedResizeMessagingTimeout`, but a run of them could otherwise
+    /// still add up to seconds on the main thread). A member skipped this
+    /// way is simply absent from the result, which already reads as "could
+    /// not be reached" to every caller downstream (`SnapLinkedResizeSupport`
+    /// skips a missing frame rather than guessing at it, and the corrective
+    /// pass below never discovers a minimum for it either) — it is picked
+    /// up again on the next notification instead.
+    private func writeAdjustments(_ adjustments: [SnapLinkedResizeSupport.Adjustment],
+                                  deadline: TimeInterval) -> [CGWindowID: CGRect] {
+        var appliedFrames: [CGWindowID: CGRect] = [:]
+        for adjustment in adjustments {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { break }
+            appliedFrames[adjustment.windowID] = writeLinkedResizeFrame(adjustment.frame, windowID: adjustment.windowID)
+        }
+        return appliedFrames
+    }
+
     /// Writes `rect` (AppKit coordinates) to `windowID` via the Accessibility
-    /// observer already kept for it, marking the write as self-initiated
-    /// first so the notification it provokes is not mistaken for a fresh
-    /// user drag, then reads back what was actually accepted — the only way
-    /// to discover an app-enforced minimum size Accessibility never exposes
-    /// directly. Returns `nil` only when the window cannot be reached at
-    /// all (closed mid-drag, say), in which case the caller simply leaves
-    /// its stored zone as it was.
+    /// observer already kept for it, then reads back what was actually
+    /// accepted — the only way to discover an app-enforced minimum size
+    /// Accessibility never exposes directly — and records that as the new
+    /// self-initiated marker (`isSelfInitiatedEcho`) so the notification
+    /// this write provokes is not mistaken for a fresh user drag. Returns
+    /// `nil` when the window cannot be reached at all (closed mid-drag, the
+    /// short `linkedResizeMessagingTimeout` tripping on a hung app, ...), in
+    /// which case the caller leaves its stored zone as it was and skips it
+    /// for any further correction this pass.
     @discardableResult
     private func writeLinkedResizeFrame(_ rect: CGRect, windowID: CGWindowID) -> CGRect? {
         guard let axWindow = linkedResizeObservers[windowID]?.window else { return nil }
-        linkedResizeSelfInitiated[windowID] = ProcessInfo.processInfo.systemUptime
         let axRect = axFrame(fromAppKit: rect)
         _ = setSize(axRect.size, on: axWindow)
         _ = setPosition(axRect.origin, on: axWindow)
-        guard let actual = frame(of: axWindow) else { return rect }
-        return appKitFrame(fromAX: actual)
+        // A failed read-back (the short timeout tripping, most likely) means
+        // there is no way to know what — if anything — actually landed, so
+        // this is reported as a miss rather than assumed to have succeeded:
+        // the stored zone is better left stale than set to a frame nobody
+        // ever confirmed, and a member reported this way is exactly what
+        // `writeAdjustments` and the corrective pass already treat as
+        // unreachable.
+        guard let actual = frame(of: axWindow) else { return nil }
+        let actualFrame = appKitFrame(fromAX: actual)
+        linkedResizeSelfInitiated[windowID] = (actualFrame, ProcessInfo.processInfo.systemUptime)
+        return actualFrame
     }
 
     private func setFrame(_ frame: WindowLayoutFrame,

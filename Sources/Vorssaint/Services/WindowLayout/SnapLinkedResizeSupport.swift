@@ -125,11 +125,23 @@ enum SnapLinkedResizeSupport {
 
         var result: [Adjustment] = []
         var resizedFrame = newFrame
+        // Tracked separately from `result`: a neighbour that is already at
+        // its own minimum size produces no `Adjustment` for itself (its
+        // frame does not change), but the resized window must still be
+        // pulled back to stay flush with it. Using `result.isEmpty` as the
+        // "did this touch a neighbour at all" signal used to miss exactly
+        // that case, silently dropping the resized window's own pushback
+        // whenever every touched neighbour turned out unable to move.
+        var touchedNeighbour = false
 
-        // At most one of the two horizontal edges moves in a single drag
-        // (dragging a corner moves one X edge and one Y edge, never both X
-        // edges at once), so `minX` is checked first and `maxX` only when
-        // `minX` did not move.
+        // A single ordinary resize drag moves only one edge per axis, but
+        // `oldFrame`/`newFrame` are two independent reads of a live window
+        // (not two halves of one atomic drag event), so both edges of an
+        // axis showing as moved between them is a real possibility — screen
+        // edge clamping, an Option-drag that resizes from the center, or
+        // simply catching up after a burst of writes were coalesced away —
+        // and each is handled on its own rather than the second being
+        // silently ignored.
         if abs(newFrame.minX - oldFrame.minX) > edgeChangeTolerance {
             resizedFrame = applyAxisAdjustments(edge: .minX,
                                                 resizedWindowID: resizedWindowID,
@@ -139,8 +151,10 @@ enum SnapLinkedResizeSupport {
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
-                                                result: &result)
-        } else if abs(newFrame.maxX - oldFrame.maxX) > edgeChangeTolerance {
+                                                result: &result,
+                                                touchedNeighbour: &touchedNeighbour)
+        }
+        if abs(newFrame.maxX - oldFrame.maxX) > edgeChangeTolerance {
             resizedFrame = applyAxisAdjustments(edge: .maxX,
                                                 resizedWindowID: resizedWindowID,
                                                 resizedZone: resizedZone,
@@ -149,7 +163,8 @@ enum SnapLinkedResizeSupport {
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
-                                                result: &result)
+                                                result: &result,
+                                                touchedNeighbour: &touchedNeighbour)
         }
 
         if abs(newFrame.minY - oldFrame.minY) > edgeChangeTolerance {
@@ -161,8 +176,10 @@ enum SnapLinkedResizeSupport {
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
-                                                result: &result)
-        } else if abs(newFrame.maxY - oldFrame.maxY) > edgeChangeTolerance {
+                                                result: &result,
+                                                touchedNeighbour: &touchedNeighbour)
+        }
+        if abs(newFrame.maxY - oldFrame.maxY) > edgeChangeTolerance {
             resizedFrame = applyAxisAdjustments(edge: .maxY,
                                                 resizedWindowID: resizedWindowID,
                                                 resizedZone: resizedZone,
@@ -171,12 +188,13 @@ enum SnapLinkedResizeSupport {
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
-                                                result: &result)
+                                                result: &result,
+                                                touchedNeighbour: &touchedNeighbour)
         }
 
         // Nothing actually touched a neighbour: the moved edge(s) faced open
         // screen, not another member of the group.
-        guard !result.isEmpty else { return [] }
+        guard touchedNeighbour else { return [] }
         if resizedFrame != newFrame {
             result.append(Adjustment(windowID: resizedWindowID, frame: resizedFrame))
         }
@@ -198,7 +216,8 @@ enum SnapLinkedResizeSupport {
                                               gap: CGFloat,
                                               currentFrames: [CGWindowID: CGRect],
                                               minimumSize: (CGWindowID) -> CGSize,
-                                              result: inout [Adjustment]) -> CGRect {
+                                              result: inout [Adjustment],
+                                              touchedNeighbour: inout Bool) -> CGRect {
         let neighbours = group.members
             .filter { $0.windowID != resizedWindowID }
             .filter { touchingEdges(of: resizedZone, neighbourZone: $0.frame, gap: gap).contains(edge) }
@@ -226,6 +245,7 @@ enum SnapLinkedResizeSupport {
             }
         }
         guard !neighbourFrames.isEmpty else { return resizedFrame }
+        touchedNeighbour = true
 
         // The resized window must not be pushed below its own minimum size
         // either, on the rare chance a neighbour's minimum would otherwise
