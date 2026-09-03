@@ -99,19 +99,40 @@ enum SnapLayoutPresets {
                      presets: [SnapLayoutPreset],
                      panelFrame: CGRect,
                      layout: SnapLayoutsPanelLayout = defaultLayout) -> WindowLayoutAction? {
+        hit(at: point, presets: presets, panelFrame: panelFrame, layout: layout)?.action
+    }
+
+    /// Hit-tests a single card's grid and returns the action its cell
+    /// applies. Row 0 is the top row (`zones`' own order), so the row index
+    /// counts down from the card's `maxY` even though AppKit rects grow
+    /// upward from `minY`.
+    static func zone(at point: CGPoint,
+                     in preset: SnapLayoutPreset,
+                     cardFrame: CGRect) -> WindowLayoutAction? {
+        hit(at: point, in: preset, cardFrame: cardFrame)?.action
+    }
+
+    /// Same lookup as `zone(at:presets:panelFrame:)`, but keeping the cell's
+    /// identity alongside its action. Two presets can share an action for
+    /// different cells — wide-left thirds' `.rightThird` is not even-thirds'
+    /// `.rightThird` — so a highlight keyed only on the action would light
+    /// up both at once; callers that need to highlight one exact cell must
+    /// use this, not the plain `zone` lookup.
+    static func hit(at point: CGPoint,
+                    presets: [SnapLayoutPreset],
+                    panelFrame: CGRect,
+                    layout: SnapLayoutsPanelLayout = defaultLayout) -> SnapLayoutHit? {
         for (preset, frame) in cardFrames(for: presets, panelFrame: panelFrame, layout: layout) {
             guard frame.contains(point) else { continue }
-            return zone(at: point, in: preset, cardFrame: frame)
+            return hit(at: point, in: preset, cardFrame: frame)
         }
         return nil
     }
 
-    /// Hit-tests a single card's grid. Row 0 is the top row (`zones`' own
-    /// order), so the row index counts down from the card's `maxY` even
-    /// though AppKit rects grow upward from `minY`.
-    static func zone(at point: CGPoint,
-                     in preset: SnapLayoutPreset,
-                     cardFrame: CGRect) -> WindowLayoutAction? {
+    /// Single-card counterpart of `hit(at:presets:panelFrame:)`.
+    static func hit(at point: CGPoint,
+                    in preset: SnapLayoutPreset,
+                    cardFrame: CGRect) -> SnapLayoutHit? {
         guard cardFrame.contains(point), preset.columns > 0, !preset.zones.isEmpty else { return nil }
         let rows = Int(ceil(Double(preset.zones.count) / Double(preset.columns)))
         guard rows > 0 else { return nil }
@@ -122,6 +143,62 @@ enum SnapLayoutPresets {
         let row = min(rows - 1, max(0, Int((cardFrame.maxY - point.y) / cellHeight)))
         let index = row * preset.columns + column
         guard preset.zones.indices.contains(index) else { return nil }
-        return preset.zones[index]
+        return SnapLayoutHit(cell: SnapLayoutCellID(presetID: preset.id, index: index),
+                             action: preset.zones[index])
     }
+
+    /// The narrow band `WindowEdgeSnapSupport.activationDistance` (12pt)
+    /// governs the *initial* top-edge trigger with, mirrored here so this
+    /// function's `isCurrentlyShown: false` branch is covered by pure tests
+    /// without a multi-screen fixture. `WindowLayoutService` itself keeps
+    /// asking the seam-aware `WindowEdgeSnapSupport.snapLayoutsTriggerScreen`
+    /// for that first decision, since a single `visibleFrame` here cannot
+    /// know whether a neighbouring display owns the seam.
+    private static let initialActivationDistance: CGFloat = 12
+
+    /// Whether the Snap Layouts panel should be open right now.
+    ///
+    /// The panel opening and the panel staying open are different
+    /// questions. Opening only needs the pointer in the same narrow strip
+    /// hugging the screen's top edge that the classic corner/half snap
+    /// uses. But the panel itself is drawn well below that strip (`show`
+    /// leaves room for its own height plus a top inset), so once open,
+    /// requiring the pointer to stay in that same narrow strip would close
+    /// the panel the instant it is dragged down toward the cards — there
+    /// would be no way to ever reach one. Once shown, this instead asks
+    /// whether the pointer is still reachable from the panel: over the
+    /// cards themselves (padded by `grace`, so the edge is forgiving rather
+    /// than hair-trigger), or anywhere in the corridor directly above the
+    /// panel connecting it back up to the screen's top edge, which the
+    /// pointer necessarily crosses to get from one to the other.
+    static func shouldShowPanel(at point: CGPoint,
+                                panelFrame: CGRect?,
+                                visibleFrame: CGRect,
+                                isCurrentlyShown: Bool,
+                                activationDistance: CGFloat = initialActivationDistance,
+                                grace: CGFloat = 24) -> Bool {
+        guard isCurrentlyShown else {
+            return point.y >= visibleFrame.maxY - activationDistance
+        }
+        guard let panelFrame else { return false }
+        let expandedPanel = panelFrame.insetBy(dx: -grace, dy: -grace)
+        if expandedPanel.contains(point) { return true }
+        guard point.x >= expandedPanel.minX, point.x <= expandedPanel.maxX else { return false }
+        let corridorTop = visibleFrame.maxY + activationDistance
+        return point.y >= panelFrame.maxY && point.y <= corridorTop
+    }
+}
+
+/// Identifies one cell within one preset card. A `WindowLayoutAction` alone
+/// cannot: wide-left thirds and even thirds both have a `.rightThird` cell,
+/// but they are different cells in different cards.
+struct SnapLayoutCellID: Equatable {
+    let presetID: String
+    let index: Int
+}
+
+/// A resolved panel hit: which cell, and the action releasing on it applies.
+struct SnapLayoutHit: Equatable {
+    let cell: SnapLayoutCellID
+    let action: WindowLayoutAction
 }

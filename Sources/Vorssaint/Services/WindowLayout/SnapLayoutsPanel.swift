@@ -22,6 +22,11 @@ final class SnapLayoutsPanel {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    /// The panel's current on-screen frame, or nil before it has ever been
+    /// shown. `WindowLayoutService` uses this to decide whether the pointer
+    /// is still reachable from an open panel.
+    var frame: CGRect? { panel?.frame }
+
     /// Shows (or repositions) the panel centered at the top of `visibleFrame`
     /// with the given preset cards. Safe to call on every drag sample: the
     /// hosting controller and its SwiftUI tree are created once, and later
@@ -56,42 +61,28 @@ final class SnapLayoutsPanel {
         panel.orderOut(nil)
     }
 
-    /// Whether an AppKit-coordinate point falls inside the panel — the
-    /// caller uses this to decide whether a release should resolve through
-    /// the panel or fall back to the classic corner/half edge snap.
-    func contains(_ point: CGPoint) -> Bool {
-        guard let panel, panel.isVisible else { return false }
-        return panel.frame.contains(point)
-    }
-
     /// Highlights the cell under `point`, if any, and returns the preview
     /// target releasing there would apply — reusing the same
     /// `WindowEdgeSnapTarget` shape the classic edge-snap preview draws, so
     /// hovering a Snap Layouts cell shows that same live rectangle over the
-    /// zone it targets.
+    /// zone it targets. Returns nil, and clears any highlight, whenever
+    /// `point` is not over a cell — including inside the panel's own
+    /// padding — so a caller must always have its own fallback rather than
+    /// treating nil as "still on the panel, do nothing".
     @discardableResult
     func updateHover(at point: CGPoint, visibleFrame: CGRect) -> WindowEdgeSnapTarget? {
         guard let panel, panel.isVisible else { return nil }
-        let action = SnapLayoutPresets.zone(at: point, presets: state.presets, panelFrame: panel.frame)
-        if state.highlighted != action {
-            state.highlighted = action
+        let hit = SnapLayoutPresets.hit(at: point, presets: state.presets, panelFrame: panel.frame)
+        if state.highlighted != hit?.cell {
+            state.highlighted = hit?.cell
         }
-        guard let action else { return nil }
-        let rect = WindowLayoutGeometry.rect(for: action,
+        guard let hit else { return nil }
+        let rect = WindowLayoutGeometry.rect(for: hit.action,
                                              current: visibleFrame,
                                              visibleFrame: visibleFrame,
                                              windowGap: WindowLayoutGaps.windowGap,
                                              screenGap: WindowLayoutGaps.screenGap)
-        return WindowEdgeSnapTarget(action: action, frame: rect.integral, visibleFrame: visibleFrame)
-    }
-
-    /// Clears the highlighted cell without hiding the panel — used while the
-    /// pointer is still in the top hot zone but has drifted off the panel
-    /// (e.g. toward a real screen corner), where the classic preview takes
-    /// back over.
-    func clearHover() {
-        guard state.highlighted != nil else { return }
-        state.highlighted = nil
+        return WindowEdgeSnapTarget(action: hit.action, frame: rect.integral, visibleFrame: visibleFrame)
     }
 
     private func ensurePanel() -> NSPanel {
@@ -121,5 +112,9 @@ final class SnapLayoutsPanel {
 /// view itself never touches the drag.
 final class SnapLayoutsPanelState: ObservableObject {
     @Published var presets: [SnapLayoutPreset] = []
-    @Published var highlighted: WindowLayoutAction?
+    /// Keyed by cell, not by `WindowLayoutAction`: two different cards can
+    /// share an action for different cells (wide-left thirds' `.rightThird`
+    /// is not even-thirds' `.rightThird`), so keying on the action alone
+    /// would light up a cell in every card that happens to share it.
+    @Published var highlighted: SnapLayoutCellID?
 }

@@ -16,7 +16,7 @@ struct SnapLayoutsPanelView: View {
     var body: some View {
         HStack(spacing: SnapLayoutPresets.defaultLayout.spacing) {
             ForEach(state.presets) { preset in
-                SnapLayoutCardView(preset: preset, highlighted: state.highlighted)
+                SnapLayoutCardView(preset: preset, highlightedCellIndex: highlightedCellIndex(in: preset))
             }
         }
         .padding(SnapLayoutPresets.defaultLayout.padding)
@@ -31,6 +31,13 @@ struct SnapLayoutsPanelView: View {
         )
         .shadow(color: .black.opacity(colorScheme == .light ? 0.16 : 0.45), radius: 14, y: 4)
     }
+
+    /// `state.highlighted` names a cell by (preset id, index); a card only
+    /// needs the index half once it already knows which preset it is.
+    private func highlightedCellIndex(in preset: SnapLayoutPreset) -> Int? {
+        guard let highlighted = state.highlighted, highlighted.presetID == preset.id else { return nil }
+        return highlighted.index
+    }
 }
 
 /// One preset's mini grid: as many cells as `preset.zones` has, arranged in
@@ -38,7 +45,7 @@ struct SnapLayoutsPanelView: View {
 /// accent color.
 private struct SnapLayoutCardView: View {
     let preset: SnapLayoutPreset
-    let highlighted: WindowLayoutAction?
+    let highlightedCellIndex: Int?
     @Environment(\.colorScheme) private var colorScheme
 
     private var rows: Int {
@@ -53,7 +60,7 @@ private struct SnapLayoutCardView: View {
                     ForEach(0..<preset.columns, id: \.self) { column in
                         let index = row * preset.columns + column
                         if preset.zones.indices.contains(index) {
-                            cell(for: preset.zones[index])
+                            cell(highlighted: index == highlightedCellIndex)
                         }
                     }
                 }
@@ -65,12 +72,12 @@ private struct SnapLayoutCardView: View {
     }
 
     @ViewBuilder
-    private func cell(for action: WindowLayoutAction) -> some View {
+    private func cell(highlighted: Bool) -> some View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(action == highlighted ? Color.accentColor : PanelSurface.cardFill(for: colorScheme))
+            .fill(highlighted ? Color.accentColor : PanelSurface.cardFill(for: colorScheme))
             .overlay(
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(action == highlighted ? Color.accentColor : PanelSurface.border(for: colorScheme),
+                    .strokeBorder(highlighted ? Color.accentColor : PanelSurface.border(for: colorScheme),
                                  lineWidth: 0.8)
             )
     }

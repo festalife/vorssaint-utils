@@ -63,6 +63,12 @@ final class WindowLayoutService: ObservableObject {
     private var edgeSnapPreviewPanel: NSPanel?
     private var edgeSnapPreviewGeneration = 0
     private var snapLayoutsPanel: SnapLayoutsPanel?
+    /// The screen the open Snap Layouts panel is anchored to, remembered so
+    /// later drag samples can ask "should it stay open" against the same
+    /// screen even once the pointer has moved past the narrow strip that
+    /// first triggered it (see `resolvedEdgeSnapTarget`). Cleared together
+    /// with the panel everywhere it hides.
+    private var snapLayoutsActiveScreen: WindowEdgeSnapScreen?
     private var assistiveModeSuspensions: [CGWindowID: EnhancedUserInterfaceSuspension] = [:]
     private var settleTimers: [CGWindowID: Timer] = [:]
     private var gestureAssistiveMode: EnhancedUserInterfaceSuspension?
@@ -1036,6 +1042,7 @@ final class WindowLayoutService: ObservableObject {
         hideEdgeSnapPreview(immediately: true)
         snapLayoutsPanel?.hide()
         snapLayoutsPanel = nil
+        snapLayoutsActiveScreen = nil
         if let edgeSnapRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), edgeSnapRunLoopSource, .commonModes)
         }
@@ -1321,27 +1328,60 @@ final class WindowLayoutService: ObservableObject {
             && AXIsProcessTrusted()
     }
 
-    /// The classic edge-snap target, or a Snap Layouts panel cell when the
-    /// pointer sits over an open panel. The panel takes priority exactly
-    /// while it is open and the pointer is over it; everywhere else —
-    /// including a release near a real screen corner past the panel's own
-    /// width — this falls back to the existing corner/half behavior
-    /// unchanged, so `WindowEdgeSnapDrag.target` can keep flowing into the
-    /// same `applyEdgeSnap` regardless of which path produced it.
+    /// The classic edge-snap target, or whatever the open Snap Layouts panel
+    /// currently resolves to.
+    ///
+    /// Opening the panel and keeping it open ask different questions
+    /// (`SnapLayoutPresets.shouldShowPanel`'s doc comment has the reasoning):
+    /// while it is already visible, this keeps asking that question against
+    /// the screen it opened on rather than re-deriving a trigger screen from
+    /// the narrow top strip alone, since by the time the pointer is over the
+    /// panel's own cards it may no longer be in that strip at all. Only once
+    /// the panel is neither open-and-reachable nor freshly triggered does
+    /// this fall back to the classic corner/half behavior unchanged, so
+    /// `WindowEdgeSnapDrag.target` keeps flowing into the same
+    /// `applyEdgeSnap` regardless of which path produced it.
     private func resolvedEdgeSnapTarget(atQuartzPoint point: CGPoint) -> WindowEdgeSnapTarget? {
-        guard snapLayoutsEnabled,
-              let triggerScreen = snapLayoutsTriggerScreen(atQuartzPoint: point)
-        else {
+        guard snapLayoutsEnabled else {
             hideSnapLayoutsPanel()
             return edgeSnapTarget(atQuartzPoint: point)
         }
-        showSnapLayoutsPanel(on: triggerScreen)
         let hoverPoint = appKitPoint(fromQuartz: point)
-        if let panel = snapLayoutsPanel, panel.contains(hoverPoint) {
-            return panel.updateHover(at: hoverPoint, visibleFrame: triggerScreen.visibleFrame)
+
+        if let activeScreen = snapLayoutsActiveScreen,
+           SnapLayoutPresets.shouldShowPanel(at: hoverPoint,
+                                             panelFrame: snapLayoutsPanel?.frame,
+                                             visibleFrame: activeScreen.visibleFrame,
+                                             isCurrentlyShown: true) {
+            return openPanelTarget(at: hoverPoint, on: activeScreen)
         }
-        snapLayoutsPanel?.clearHover()
-        return edgeSnapTarget(atQuartzPoint: point)
+
+        guard let triggerScreen = snapLayoutsTriggerScreen(atQuartzPoint: point) else {
+            hideSnapLayoutsPanel()
+            return edgeSnapTarget(atQuartzPoint: point)
+        }
+        snapLayoutsActiveScreen = triggerScreen
+        showSnapLayoutsPanel(on: triggerScreen)
+        return openPanelTarget(at: hoverPoint, on: triggerScreen)
+    }
+
+    /// The target while the panel is open (or just opened this sample):
+    /// whichever cell the pointer hovers, or — Windows' own drag-to-top
+    /// behavior once a panel is offering every halved/thirded choice as an
+    /// explicit cell (upstream issue #894) — maximize, unless the pointer
+    /// is still over a corner sub-zone, which keeps its classic corner
+    /// target so `target(at:)` and this never disagree at the corners.
+    private func openPanelTarget(at hoverPoint: CGPoint, on screen: WindowEdgeSnapScreen) -> WindowEdgeSnapTarget? {
+        if let hovered = snapLayoutsPanel?.updateHover(at: hoverPoint, visibleFrame: screen.visibleFrame) {
+            return hovered
+        }
+        let action = WindowEdgeSnapSupport.openPanelFallbackAction(at: hoverPoint, screen: screen)
+        let rect = WindowLayoutGeometry.rect(for: action,
+                                             current: screen.visibleFrame,
+                                             visibleFrame: screen.visibleFrame,
+                                             windowGap: WindowLayoutGaps.windowGap,
+                                             screenGap: WindowLayoutGaps.screenGap)
+        return WindowEdgeSnapTarget(action: action, frame: rect.integral, visibleFrame: screen.visibleFrame)
     }
 
     private func snapLayoutsTriggerScreen(atQuartzPoint point: CGPoint) -> WindowEdgeSnapScreen? {
@@ -1353,11 +1393,9 @@ final class WindowLayoutService: ObservableObject {
     }
 
     private func showSnapLayoutsPanel(on screen: WindowEdgeSnapScreen) {
+        // `availablePresets` always includes at least `.halves`, so this
+        // list is never empty — no guard needed before showing it.
         let presets = SnapLayoutPresets.availablePresets(for: screen.visibleFrame)
-        guard !presets.isEmpty else {
-            hideSnapLayoutsPanel()
-            return
-        }
         let panel = snapLayoutsPanel ?? {
             let created = SnapLayoutsPanel()
             snapLayoutsPanel = created
@@ -1368,6 +1406,7 @@ final class WindowLayoutService: ObservableObject {
 
     private func hideSnapLayoutsPanel() {
         snapLayoutsPanel?.hide()
+        snapLayoutsActiveScreen = nil
     }
 
     private func edgeSnapQuartzScreenFrames() -> [CGRect] {

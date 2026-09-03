@@ -6017,6 +6017,50 @@ struct MetricsTests {
                                       presets: slTwoCards, panelFrame: slFullPanel) == nil,
                "a point past every card resolves to no zone")
 
+        expect(SnapLayoutPresets.hit(at: CGPoint(x: 85, y: 30), in: SnapLayoutPresets.thirdsEven,
+                                     cardFrame: slThirdsCard)?.cell
+               != SnapLayoutPresets.hit(at: CGPoint(x: 70, y: 30), in: SnapLayoutPresets.thirdsWideRight,
+                                        cardFrame: CGRect(x: 0, y: 0, width: 90, height: 60))?.cell,
+               "even-thirds' rightThird cell and wide-right-thirds' rightThird cell are different cells despite sharing an action")
+        expect(SnapLayoutPresets.hit(at: CGPoint(x: 85, y: 30), in: SnapLayoutPresets.thirdsEven,
+                                     cardFrame: slThirdsCard)?.action == .rightThird,
+               "sanity: the two cells above really do share the rightThird action")
+
+        let slSyntheticVisible = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let slSyntheticPanel = CGRect(x: 600, y: 700, width: 240, height: 80)
+        func slShouldShow(_ point: CGPoint, shown: Bool, panelFrame: CGRect? = slSyntheticPanel) -> Bool {
+            SnapLayoutPresets.shouldShowPanel(at: point, panelFrame: panelFrame,
+                                              visibleFrame: slSyntheticVisible, isCurrentlyShown: shown)
+        }
+        expect(slShouldShow(CGPoint(x: 720, y: 894), shown: false),
+               "a pointer in the top strip triggers the panel to show")
+        expect(!slShouldShow(CGPoint(x: 720, y: 500), shown: false),
+               "a pointer far from the top edge never triggers the panel")
+        expect(slShouldShow(CGPoint(x: 700, y: 740), shown: true),
+               "once shown, hovering the cards keeps the panel open")
+        expect(slShouldShow(CGPoint(x: 700, y: 850), shown: true),
+               "once shown, the corridor between the panel and the physical top edge keeps it open")
+        expect(!slShouldShow(CGPoint(x: 700, y: 600), shown: true),
+               "once shown, a pointer 100pt below the panel closes it")
+        expect(!slShouldShow(CGPoint(x: 1000, y: 850), shown: true),
+               "the corridor does not extend sideways past the panel's own width")
+        expect(!slShouldShow(CGPoint(x: 700, y: 850), shown: true, panelFrame: nil),
+               "with no panel frame to reach from, a shown state without a panel never keeps itself open")
+
+        func slFallback(_ point: CGPoint, screen: WindowEdgeSnapScreen = slScreen) -> WindowLayoutAction {
+            WindowEdgeSnapSupport.openPanelFallbackAction(at: point, screen: screen)
+        }
+        expect(slFallback(CGPoint(x: 50, y: slScreen.visibleFrame.maxY)) == .topLeft,
+               "the open panel's fallback keeps the left corner sub-zone")
+        expect(slFallback(CGPoint(x: 1400, y: slScreen.visibleFrame.maxY)) == .topRight,
+               "the open panel's fallback keeps the right corner sub-zone")
+        expect(slFallback(CGPoint(x: 720, y: slScreen.visibleFrame.maxY)) == .maximize,
+               "away from both corners, the open panel's fallback is maximize rather than a plain top half")
+        expect(WindowEdgeSnapSupport.target(at: CGPoint(x: 50, y: slScreen.visibleFrame.maxY),
+                                            screens: [slScreen])?.action
+               == slFallback(CGPoint(x: 50, y: slScreen.visibleFrame.maxY)),
+               "the fallback and the classic corner/half snap agree at the left corner boundary")
+
         // MARK: Window move and resize gestures
 
         expect(WindowGestureSupport.modifiers(from: nil) == [.control, .command],
