@@ -337,6 +337,7 @@ final class WindowLayoutService: ObservableObject {
             // call `applyPlacement`).
             showSnapAssistIfNeeded(action: effectiveAction,
                                    windowID: target.windowID,
+                                   ownerPID: target.key.processID,
                                    visibleFrame: visibleFrame,
                                    fallbackFrame: target.frame)
             return finish(.success(restored: false))
@@ -824,6 +825,7 @@ final class WindowLayoutService: ObservableObject {
     /// flickers a hide-then-fade-back-in.
     private func showSnapAssistIfNeeded(action: WindowLayoutAction,
                                         windowID: CGWindowID,
+                                        ownerPID: pid_t,
                                         visibleFrame: NSRect,
                                         fallbackFrame: WindowLayoutFrame) {
         guard snapAssistEnabled,
@@ -857,10 +859,11 @@ final class WindowLayoutService: ObservableObject {
             // origin), so it is converted through the same AX↔AppKit
             // bridge every placement already uses before comparing it
             // against `screen.frame`, which is AppKit space.
-            guard let id = item.windowID, !item.isOnHiddenSpace else { continue }
-            let itemAppKitFrame = appKitFrame(fromAX: WindowLayoutFrame(origin: item.frame.origin,
-                                                                        size: item.frame.size))
-            guard screen.frame.intersects(itemAppKitFrame) else { continue }
+            guard let id = item.windowID, !item.isOnHiddenSpace,
+                  SnapAssistSupport.candidateOnScreen(windowFrame: item.frame,
+                                                      menuBarScreenTopY: menuBarScreenTopY,
+                                                      screenFrame: screen.frame)
+            else { continue }
             itemsByWindowID[id] = item
         }
         // `candidateIDs` is already MRU-ordered; a window absent from
@@ -885,20 +888,22 @@ final class WindowLayoutService: ObservableObject {
         // same bailout `SnapGroupSupport.freeSpace` already applies to an
         // oversized minimum window.
         guard SnapAssistSupport.isOfferable(freeRect: freeRect) else { hideSnapAssist(); return }
-        presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen)
+        presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen, ownerPID: ownerPID)
     }
 
     private func presentSnapAssist(cell: WindowLayoutAction,
                                    freeRect: CGRect,
                                    items: [SwitcherItem],
-                                   screen: NSScreen) {
+                                   screen: NSScreen,
+                                   ownerPID: pid_t) {
         let panel = snapAssistPanel ?? {
             let created = SnapAssistPanel()
             snapAssistPanel = created
             return created
         }()
         let text = FeatureStrings.windowLayout(L10n.shared.language)
-        panel.show(in: freeRect, on: screen, items: items, hint: text.snapAssistHint) { [weak self] item in
+        panel.show(in: freeRect, on: screen, items: items, hint: text.snapAssistHint, ignoringActivationOf: ownerPID) {
+            [weak self] item in
             self?.selectSnapAssistCandidate(item, cell: cell, screen: screen)
         }
         WindowPreviewProvider.shared.refreshPreviews(for: items) { [weak panel] windowID, image in

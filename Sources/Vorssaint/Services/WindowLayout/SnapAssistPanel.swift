@@ -71,6 +71,26 @@ final class SnapAssistPanel {
     /// notification inside the window is ignored instead.
     private var suppressActivationDismissUntil: TimeInterval = 0
     private static let activationSuppressionWindow: TimeInterval = 1.0
+    /// The app that owns the window `show` was just called for — the one
+    /// that started this whole placement, by dragging its own title bar or
+    /// otherwise. That drag or shortcut can itself activate the app (it may
+    /// not have been frontmost to begin with), and that activation
+    /// notification is not guaranteed to arrive before `show` — on a real
+    /// Mac it arrived just after, and with no suppression armed yet at
+    /// panel-open time (only `ignoreNextAppActivation`, called before a
+    /// *candidate pick*, ever armed one) it read as the person switching
+    /// away and closed the overlay within about a second of it appearing.
+    /// This app's own activation is therefore never treated as a dismissal
+    /// at all, for as long as it stays the current owner (until the next
+    /// `show` names a different one).
+    private var ignoredOwnerPID: pid_t?
+    /// Belt and suspenders alongside `ignoredOwnerPID`: no activation of
+    /// *any* app is treated as a dismissal until the panel has been showing
+    /// this content for this long, so any other activation still settling
+    /// from the gesture that opened the overlay — not necessarily the
+    /// owner's — has time to arrive first.
+    private var dismissArmedAt: TimeInterval = 0
+    private static let dismissArmDelay: TimeInterval = 0.3
 
     /// Spec §4 point 4: eight seconds of inactivity closes the overlay and
     /// leaves the space free, the same as Esc or a click elsewhere.
@@ -96,6 +116,7 @@ final class SnapAssistPanel {
              on screen: NSScreen,
              items: [SwitcherItem],
              hint: String,
+             ignoringActivationOf ownerPID: pid_t,
              onSelect: @escaping (SwitcherItem) -> Void) {
         let (frame, columns) = layout(itemCount: items.count, freeRect: freeRect, visibleFrame: screen.visibleFrame)
         state.items = items
@@ -103,6 +124,8 @@ final class SnapAssistPanel {
         state.hint = hint
         state.columns = columns
         state.onSelect = onSelect
+        ignoredOwnerPID = ownerPID
+        dismissArmedAt = ProcessInfo.processInfo.systemUptime + Self.dismissArmDelay
 
         let panel = ensurePanel()
         panel.setFrame(frame, display: true)
@@ -266,9 +289,11 @@ final class SnapAssistPanel {
         ) { [weak self] notification in
             guard let self,
                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.bundleIdentifier != Bundle.main.bundleIdentifier
+                  app.bundleIdentifier != Bundle.main.bundleIdentifier,
+                  app.processIdentifier != self.ignoredOwnerPID
             else { return }
-            if ProcessInfo.processInfo.systemUptime < self.suppressActivationDismissUntil {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now < self.suppressActivationDismissUntil || now < self.dismissArmedAt {
                 return
             }
             self.hide()

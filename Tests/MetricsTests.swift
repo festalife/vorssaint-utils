@@ -6432,6 +6432,30 @@ struct MetricsTests {
         expect(!SnapAssistSupport.isOfferable(freeRect: CGRect(x: 0, y: 0, width: 400, height: 150)),
                "a sliver shorter than the minimum is not worth an overlay either")
 
+        // Real numbers from a real-Mac E2E report (screen 1512x982, menu bar
+        // top at 982) that questioned whether the AX↔AppKit space
+        // conversion was silently dropping candidates. It was not: a Chrome
+        // window at AX frame (0,33,935,949) converts to AppKit (0,0,935,949)
+        // — inside the screen — and a window on a second, disjoint 1512-wide
+        // display starting at x 1512 does not.
+        let saScreenFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        expect(SnapAssistSupport.candidateOnScreen(windowFrame: CGRect(x: 0, y: 33, width: 935, height: 949),
+                                                    menuBarScreenTopY: 982,
+                                                    screenFrame: saScreenFrame),
+               "a window well inside the screen's own bounds passes")
+        expect(SnapAssistSupport.candidateOnScreen(windowFrame: CGRect(x: 1400, y: 33, width: 300, height: 500),
+                                                    menuBarScreenTopY: 982,
+                                                    screenFrame: saScreenFrame),
+               "a window straddling this screen's right edge still overlaps it and passes")
+        expect(!SnapAssistSupport.candidateOnScreen(windowFrame: CGRect(x: 1512, y: 33, width: 935, height: 949),
+                                                     menuBarScreenTopY: 982,
+                                                     screenFrame: saScreenFrame),
+               "a window entirely on a second display just past this screen's right edge does not pass")
+        expect(!SnapAssistSupport.candidateOnScreen(windowFrame: CGRect(x: 0, y: 1200, width: 300, height: 200),
+                                                     menuBarScreenTopY: 982,
+                                                     screenFrame: saScreenFrame),
+               "a window whose AX y is far below the menu bar's top converts below the screen and does not pass")
+
         let saCells: [WindowLayoutAction] = [.topRight, .bottomLeft, .bottomRight]
         expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: []) == .topRight,
                "with nothing occupied yet, the first cell in reading order is offered")

@@ -23,6 +23,30 @@ enum SnapAssistSupport {
         freeRect.width >= minimumOfferableSpace && freeRect.height >= minimumOfferableSpace
     }
 
+    /// Whether a candidate window belongs on `screenFrame` at all — a
+    /// window on another display, or one that does not currently overlap
+    /// this screen, is never worth offering: picking it would place it into
+    /// a zone it cannot usefully reach, or one the person cannot even see
+    /// right now.
+    ///
+    /// `windowFrame` is window-server/Accessibility global space (top-left
+    /// origin, Y growing downward — `kCGWindowBounds`/`kAXPositionAttribute`
+    /// both use it); `screenFrame` is AppKit space (bottom-left origin, Y
+    /// growing upward — `NSScreen.frame`). `menuBarScreenTopY` (the `maxY`
+    /// of whichever screen owns the menu bar) is the single fixed point
+    /// both spaces agree on, the same conversion
+    /// `WindowLayoutService.appKitFrame(fromAX:)` already performs for
+    /// every placement; duplicated here in pure `CGRect` terms so the
+    /// exact numbers a real Mac reports can be pinned down by a test
+    /// without any AppKit or Accessibility involved.
+    static func candidateOnScreen(windowFrame: CGRect, menuBarScreenTopY: CGFloat, screenFrame: CGRect) -> Bool {
+        let windowAppKitFrame = CGRect(x: windowFrame.origin.x,
+                                       y: menuBarScreenTopY - windowFrame.origin.y - windowFrame.height,
+                                       width: windowFrame.width,
+                                       height: windowFrame.height)
+        return screenFrame.intersects(windowAppKitFrame)
+    }
+
     /// The other zones in the same layout `action` belongs to — what
     /// Windows leaves for Snap Assist to offer (spec §4/§5's examples):
     /// a half's other half, a third's other two thirds *as two separate
