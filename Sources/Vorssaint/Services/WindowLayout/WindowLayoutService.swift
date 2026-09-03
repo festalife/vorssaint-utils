@@ -88,6 +88,41 @@ final class WindowLayoutService: ObservableObject {
     /// invalidate on a reconfiguration (`AppKitExtensions.swift` explains
     /// the same choice for `isStillAttached`).
     private var snapGroups: [CGDirectDisplayID: SnapGroup] = [:]
+    /// One Accessibility observer per Snap Group member currently being
+    /// watched for a linked resize (spec §6), kept in lockstep with
+    /// `snapGroups`' combined membership by `syncLinkedResizeObservers()`
+    /// every time a group is created, updated or pruned. Empty whenever
+    /// `windowSnapLinkedResizeEnabled` is off, matching how every other tap
+    /// in this service only touches Accessibility once a feature is on.
+    private var linkedResizeObservers: [CGWindowID: LinkedResizeObservation] = [:]
+    private struct LinkedResizeObservation {
+        let observer: AXObserver
+        let window: AXUIElement
+    }
+    /// A window this service just wrote a frame to itself, and when —
+    /// so the resize/move notification that write provokes can be told
+    /// apart from a notification the user's own drag produced, the same
+    /// idea `syntheticEventMarker` above uses for mouse events. Generous on
+    /// purpose: `AXObserver` callbacks can lag a running app by a tick or
+    /// two under load, and mistaking a self-initiated write for a fresh user
+    /// drag is what turns this feature into a feedback loop.
+    private var linkedResizeSelfInitiated: [CGWindowID: TimeInterval] = [:]
+    private let linkedResizeSelfInitiatedWindow: TimeInterval = 0.5
+    /// Members with a linked-resize notification already scheduled but not
+    /// yet processed — a resize drag emits many notifications in a burst,
+    /// and this coalesces them: further notifications for the same window
+    /// arriving before `linkedResizeThrottleInterval` elapses are dropped,
+    /// and the one scheduled run reads whatever the live frame is by the
+    /// time it actually fires, which is the last geometry of the burst.
+    private var linkedResizePendingWindows: Set<CGWindowID> = []
+    private let linkedResizeThrottleInterval: TimeInterval = 1.0 / 30.0
+    /// Accessibility exposes no way to ask a window for its minimum size
+    /// up front, so a first pass guesses this floor — the same 80×80 floor
+    /// `focusedTarget` already uses to decide a window is worth acting on
+    /// at all — and `applyLinkedResizeAdjustments` corrects course with a
+    /// second pass using whatever size Accessibility actually accepted,
+    /// whenever that turns out to be larger.
+    private static let linkedResizeMinimumSizeGuess = CGSize(width: 80, height: 80)
     private var assistiveModeSuspensions: [CGWindowID: EnhancedUserInterfaceSuspension] = [:]
     private var settleTimers: [CGWindowID: Timer] = [:]
     private var gestureAssistiveMode: EnhancedUserInterfaceSuspension?
@@ -136,6 +171,19 @@ final class WindowLayoutService: ObservableObject {
             && !WindowEdgeSnapSupport.isSystemTilingEnabled
             && trusted
         wantsEdgeSnap ? startEdgeSnapTap() : stopEdgeSnapTap()
+
+        syncLinkedResizeObservers()
+    }
+
+    /// Whether a linked resize should react at all right now — the same
+    /// three gates every other Window Layout tap checks (`available`,
+    /// `trusted`, its own toggle), read together here since
+    /// `syncLinkedResizeObservers()` and every notification handler need the
+    /// identical answer.
+    private var linkedResizeFeatureAvailable: Bool {
+        AppFeature.windowLayout.isAvailable
+            && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapLinkedResizeEnabled)
+            && AXIsProcessTrusted()
     }
 
     /// Stops every Window Layout input hook before Accessibility is revoked or
@@ -147,6 +195,8 @@ final class WindowLayoutService: ObservableObject {
         stopGestureTap()
         stopEdgeSnapTap()
         hideSnapAssist()
+        for windowID in Array(linkedResizeObservers.keys) { stopWatchingLinkedResize(windowID) }
+        linkedResizeSelfInitiated.removeAll()
         for timer in settleTimers.values { timer.invalidate() }
         settleTimers.removeAll()
         let suspensions = assistiveModeSuspensions.values
@@ -618,6 +668,7 @@ final class WindowLayoutService: ObservableObject {
         } else {
             snapGroups[screen.displayID] = pruned
         }
+        syncLinkedResizeObservers()
         return pruned
     }
 
@@ -665,6 +716,7 @@ final class WindowLayoutService: ObservableObject {
         } else {
             snapGroups[screen.displayID] = updated
         }
+        syncLinkedResizeObservers()
     }
 
     /// Drops `windowID` from every Snap Group it might be in — used wherever
@@ -677,6 +729,7 @@ final class WindowLayoutService: ObservableObject {
                 snapGroups.removeValue(forKey: screenID)
             }
         }
+        syncLinkedResizeObservers()
     }
 
     /// How long a cached `currentFrames(for:on:)` result stays usable.
@@ -1350,6 +1403,229 @@ final class WindowLayoutService: ObservableObject {
         return Set(windows.compactMap {
             ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value
         })
+    }
+
+    /// The owning process of an on-screen window, looked up by a single
+    /// window-server scan — the same lookup `rawCurrentFrames` inlines for
+    /// every member at once, factored out here because starting to watch a
+    /// linked-resize member happens one window at a time, on group changes
+    /// that are rare compared to the 30 Hz a drag samples at.
+    private func ownerPID(for windowID: CGWindowID) -> pid_t? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements],
+                                                        kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        for window in windows {
+            guard (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID else { continue }
+            return (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+        }
+        return nil
+    }
+
+    // MARK: - Linked resize of snapped neighbours (spec §6)
+
+    /// Makes the set of watched Accessibility observers match every current
+    /// Snap Group member exactly, across every screen — called after every
+    /// group mutation (`updateSnapGroup`, `prunedGroup`,
+    /// `removeFromAllSnapGroups`) and once from `syncWithPreferences()` so
+    /// toggling the feature itself starts or stops watching immediately
+    /// instead of waiting for the next placement.
+    private func syncLinkedResizeObservers() {
+        let wanted: Set<CGWindowID> = linkedResizeFeatureAvailable
+            ? Set(snapGroups.values.flatMap { $0.members.map(\.windowID) })
+            : []
+        let watching = Set(linkedResizeObservers.keys)
+        for windowID in watching.subtracting(wanted) { stopWatchingLinkedResize(windowID) }
+        for windowID in wanted.subtracting(watching) { startWatchingLinkedResize(windowID) }
+    }
+
+    private func startWatchingLinkedResize(_ windowID: CGWindowID) {
+        guard let pid = ownerPID(for: windowID) else { return }
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 0.35)
+        guard let axWindow = axElement(windowID: windowID, in: axApp) else { return }
+
+        var observerRef: AXObserver?
+        guard AXObserverCreate(pid, windowLayoutLinkedResizeAXCallback, &observerRef) == .success,
+              let observer = observerRef else { return }
+
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let addedResized = AXObserverAddNotification(observer, axWindow,
+                                                      kAXResizedNotification as CFString, refcon) == .success
+        let addedMoved = AXObserverAddNotification(observer, axWindow,
+                                                    kAXMovedNotification as CFString, refcon) == .success
+        // Both notifications matter (a move must still be told apart from a
+        // resize once it arrives, see `SnapLinkedResizeSupport`), but even
+        // one landing means the observer is worth keeping.
+        guard addedResized || addedMoved else { return }
+
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        linkedResizeObservers[windowID] = LinkedResizeObservation(observer: observer, window: axWindow)
+    }
+
+    private func stopWatchingLinkedResize(_ windowID: CGWindowID) {
+        guard let observation = linkedResizeObservers.removeValue(forKey: windowID) else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observation.observer), .commonModes)
+        AXObserverRemoveNotification(observation.observer, observation.window, kAXResizedNotification as CFString)
+        AXObserverRemoveNotification(observation.observer, observation.window, kAXMovedNotification as CFString)
+        linkedResizePendingWindows.remove(windowID)
+        linkedResizeSelfInitiated.removeValue(forKey: windowID)
+    }
+
+    /// Called from the C observer callback (on the main run loop, since the
+    /// observer's run-loop source was added there — no further dispatch
+    /// needed, matching `AutoQuitService.handleAX`).
+    func handleLinkedResizeNotification(element: AXUIElement) {
+        guard let windowID = AXWindowResolver.windowID(for: element) else { return }
+        scheduleLinkedResizeProcessing(windowID: windowID)
+    }
+
+    /// Coalesces a burst of notifications for one window down to a single
+    /// throttled pass, and drops a notification outright when it is just
+    /// the echo of a frame this service wrote a moment ago.
+    private func scheduleLinkedResizeProcessing(windowID: CGWindowID) {
+        guard linkedResizeFeatureAvailable else { return }
+        if let markedAt = linkedResizeSelfInitiated[windowID],
+           ProcessInfo.processInfo.systemUptime - markedAt < linkedResizeSelfInitiatedWindow {
+            return
+        }
+        guard linkedResizePendingWindows.insert(windowID).inserted else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + linkedResizeThrottleInterval) { [weak self] in
+            self?.processLinkedResize(windowID: windowID)
+        }
+    }
+
+    /// The throttled linked-resize pass: reads `windowID`'s live frame right
+    /// now (not whatever frame the triggering notification carried, which
+    /// may be stale by the time a coalesced burst finishes), compares it
+    /// against the group's stored zone for that member — the same
+    /// reference `SnapGroupSupport` uses everywhere else — and, if that is
+    /// a genuine resize touching a neighbour, applies the adjustments.
+    private func processLinkedResize(windowID: CGWindowID) {
+        linkedResizePendingWindows.remove(windowID)
+        guard linkedResizeFeatureAvailable else { return }
+        if let markedAt = linkedResizeSelfInitiated[windowID],
+           ProcessInfo.processInfo.systemUptime - markedAt < linkedResizeSelfInitiatedWindow {
+            return
+        }
+        guard let axWindow = linkedResizeObservers[windowID]?.window,
+              !boolAttribute(axWindow, kAXMinimizedAttribute as String),
+              let liveAXFrame = frame(of: axWindow)
+        else { return }
+        let newFrame = appKitFrame(fromAX: liveAXFrame)
+
+        guard let group = snapGroups.values.first(where: { grp in grp.members.contains { $0.windowID == windowID } }),
+              let resizedMember = group.members.first(where: { $0.windowID == windowID })
+        else { return }
+        let oldFrame = resizedMember.frame
+        guard oldFrame != newFrame else { return }
+
+        // A genuine resize of a group member is "another action" (spec §4):
+        // Snap Assist is offering a candidate for a *different* free cell,
+        // and the person just started reshaping the layout instead of
+        // picking one, so the overlay has nothing left to be right about.
+        // Checked before `adjustments` below on purpose — this fires even
+        // when the moved edge faces open screen and no neighbour ends up
+        // adjusted, since it is the resize itself, not its knock-on effect,
+        // that makes the offer stale. A plain move (`newFrame.size ==
+        // oldFrame.size`) leaves the overlay alone.
+        if newFrame.size != oldFrame.size {
+            hideSnapAssist()
+        }
+
+        var liveFrames = rawCurrentFrames(for: group)
+        liveFrames[windowID] = newFrame
+
+        let adjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: windowID,
+            oldFrame: oldFrame,
+            newFrame: newFrame,
+            group: group,
+            gap: WindowLayoutGaps.windowGap,
+            currentFrames: liveFrames,
+            minimumSize: { _ in Self.linkedResizeMinimumSizeGuess })
+        guard !adjustments.isEmpty else { return }
+
+        applyLinkedResizeAdjustments(adjustments,
+                                     resizedWindowID: windowID,
+                                     oldFrame: oldFrame,
+                                     newFrame: newFrame,
+                                     group: group)
+    }
+
+    /// Writes every adjustment's frame, records the actual result — which
+    /// Accessibility can shrink further than requested when an app enforces
+    /// its own minimum size, something Accessibility has no attribute to
+    /// query in advance — into the Snap Group's stored zones, and, only
+    /// when a neighbour's actual size came back smaller than requested,
+    /// runs one corrective pass that pulls the resized window's own edge
+    /// back to match, so the two frames end up flush rather than
+    /// overlapping (spec §6: "the divider stops at the minimum").
+    private func applyLinkedResizeAdjustments(_ adjustments: [SnapLinkedResizeSupport.Adjustment],
+                                              resizedWindowID: CGWindowID,
+                                              oldFrame: CGRect,
+                                              newFrame: CGRect,
+                                              group: SnapGroup) {
+        var appliedFrames: [CGWindowID: CGRect] = [:]
+        for adjustment in adjustments {
+            appliedFrames[adjustment.windowID] = writeLinkedResizeFrame(adjustment.frame, windowID: adjustment.windowID)
+        }
+
+        var finalGroup = group
+        for adjustment in adjustments {
+            guard let actual = appliedFrames[adjustment.windowID],
+                  let index = finalGroup.members.firstIndex(where: { $0.windowID == adjustment.windowID })
+            else { continue }
+            finalGroup.members[index].frame = actual
+        }
+
+        var discoveredMinimums: [CGWindowID: CGSize] = [:]
+        for adjustment in adjustments where adjustment.windowID != resizedWindowID {
+            guard let actual = appliedFrames[adjustment.windowID],
+                  abs(actual.width - adjustment.frame.width) > frameTolerance
+                    || abs(actual.height - adjustment.frame.height) > frameTolerance
+            else { continue }
+            discoveredMinimums[adjustment.windowID] = actual.size
+        }
+
+        if !discoveredMinimums.isEmpty {
+            var liveFrames = appliedFrames
+            liveFrames[resizedWindowID] = newFrame
+            let corrected = SnapLinkedResizeSupport.adjustments(
+                resizedWindowID: resizedWindowID,
+                oldFrame: oldFrame,
+                newFrame: newFrame,
+                group: group,
+                gap: WindowLayoutGaps.windowGap,
+                currentFrames: liveFrames,
+                minimumSize: { discoveredMinimums[$0] ?? Self.linkedResizeMinimumSizeGuess })
+            for adjustment in corrected where adjustment.windowID == resizedWindowID {
+                guard let actual = writeLinkedResizeFrame(adjustment.frame, windowID: resizedWindowID),
+                      let index = finalGroup.members.firstIndex(where: { $0.windowID == resizedWindowID })
+                else { continue }
+                finalGroup.members[index].frame = actual
+            }
+        }
+
+        snapGroups[group.screenID] = finalGroup
+    }
+
+    /// Writes `rect` (AppKit coordinates) to `windowID` via the Accessibility
+    /// observer already kept for it, marking the write as self-initiated
+    /// first so the notification it provokes is not mistaken for a fresh
+    /// user drag, then reads back what was actually accepted — the only way
+    /// to discover an app-enforced minimum size Accessibility never exposes
+    /// directly. Returns `nil` only when the window cannot be reached at
+    /// all (closed mid-drag, say), in which case the caller simply leaves
+    /// its stored zone as it was.
+    @discardableResult
+    private func writeLinkedResizeFrame(_ rect: CGRect, windowID: CGWindowID) -> CGRect? {
+        guard let axWindow = linkedResizeObservers[windowID]?.window else { return nil }
+        linkedResizeSelfInitiated[windowID] = ProcessInfo.processInfo.systemUptime
+        let axRect = axFrame(fromAppKit: rect)
+        _ = setSize(axRect.size, on: axWindow)
+        _ = setPosition(axRect.origin, on: axWindow)
+        guard let actual = frame(of: axWindow) else { return rect }
+        return appKitFrame(fromAX: actual)
     }
 
     private func setFrame(_ frame: WindowLayoutFrame,
@@ -3335,6 +3611,18 @@ private final class WindowDirectionalIndicatorCanvasView: NSView {
             self = value
         }
     }
+}
+
+/// C trampoline for the linked-resize `AXObserver` — no captures, so it
+/// bridges to a C function pointer; the service is recovered from the
+/// refcon, same pattern as `autoQuitAXCallback`.
+private func windowLayoutLinkedResizeAXCallback(_ observer: AXObserver,
+                                                 _ element: AXUIElement,
+                                                 _ notification: CFString,
+                                                 _ refcon: UnsafeMutableRawPointer?) {
+    guard let refcon else { return }
+    let service = Unmanaged<WindowLayoutService>.fromOpaque(refcon).takeUnretainedValue()
+    service.handleLinkedResizeNotification(element: element)
 }
 
 /// Everything the deferred settle verification needs to finish judging a

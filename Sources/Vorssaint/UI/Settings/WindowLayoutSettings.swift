@@ -15,6 +15,7 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
     @AppStorage(DefaultsKey.windowSnapFillsFreeSpace) private var snapFillsFreeSpace = true
     @AppStorage(DefaultsKey.windowSnapAssistEnabled) private var snapAssistEnabled = true
+    @AppStorage(DefaultsKey.windowSnapLinkedResizeEnabled) private var snapLinkedResizeEnabled = true
     @AppStorage(DefaultsKey.windowGestureEnabled) private var gestureEnabled = false
     @AppStorage(DefaultsKey.windowGestureModifiers) private var gestureModifiers = WindowGestureSupport.defaultModifierStorageValue
     @AppStorage(DefaultsKey.windowGestureRaiseWindow) private var gestureRaiseWindow = false
@@ -84,6 +85,16 @@ struct WindowLayoutSettings: View {
                     // it that start or stop an event tap.
                     Toggle(text.snapFillsFreeSpaceEnable, isOn: $snapFillsFreeSpace)
                     Text(text.snapFillsFreeSpaceCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // Unlike the toggle above, this one starts and stops
+                    // Accessibility observers on every group member, so it
+                    // needs the same sync call the tap toggles above use.
+                    Toggle(text.snapLinkedResizeEnable, isOn: $snapLinkedResizeEnabled)
+                        .onChange(of: snapLinkedResizeEnabled) { _, _ in
+                            WindowLayoutService.shared.syncWithPreferences()
+                        }
+                    Text(text.snapLinkedResizeCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

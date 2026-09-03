@@ -397,6 +397,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/WindowLayout/SnapLayoutsSupport.swift \
         Sources/Vorssaint/Services/WindowLayout/SnapGroupSupport.swift \
         Sources/Vorssaint/Services/WindowLayout/SnapAssistSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/SnapLinkedResizeSupport.swift \
         Sources/Vorssaint/Core/WindowDirectionalStrings.swift \
         Sources/Vorssaint/Services/CleaningMode/CleaningUnlockCounter.swift \
         Sources/Vorssaint/Services/Display/ExtraBrightnessSupport.swift \

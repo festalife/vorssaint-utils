@@ -74,6 +74,7 @@ extension AppFeature {
                 || boolFor(DefaultsKey.windowGestureEnabled)
                 || boolFor(DefaultsKey.windowEdgeSnapEnabled)
                 || boolFor(DefaultsKey.windowSnapLayoutsEnabled)
+                || boolFor(DefaultsKey.windowSnapLinkedResizeEnabled)
         case .screenOCR, .cleaningMode, .screenshot, .commandBar, .screenRecorder:
             return false
         default:

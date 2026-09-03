@@ -586,6 +586,7 @@ enum DefaultsKey {
     static let windowSnapLayoutsEnabled = "windowSnapLayoutsEnabled"
     static let windowSnapFillsFreeSpace = "windowSnapFillsFreeSpace"
     static let windowSnapAssistEnabled = "windowSnapAssistEnabled"
+    static let windowSnapLinkedResizeEnabled = "windowSnapLinkedResizeEnabled"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1311,6 +1312,10 @@ enum Defaults {
         // Assist only ever appears once a placement leaves real free space
         // on screen, so it never surfaces anything on its own.
         DefaultsKey.windowSnapAssistEnabled: true,
+        // On by default for the same reason: a linked resize only ever
+        // fires once a real Snap Group with a touching neighbour already
+        // exists, so it never surfaces new behavior by itself.
+        DefaultsKey.windowSnapLinkedResizeEnabled: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,

@@ -6571,6 +6571,134 @@ struct MetricsTests {
         expect(SnapAssistSupport.contentSize(count: 0, columns: 2, itemSize: CGSize(width: 100, height: 80),
                                              spacing: 10, padding: 16) == .zero,
                "no items means no content size")
+        // MARK: Snap Linked Resize
+
+        // A generous default: these fixtures care about the *shape* of the
+        // adjustment, not about hitting a minimum, so a tiny floor keeps the
+        // clamp out of the way unless a test deliberately sets it low.
+        func slrNoMinimum(_: CGWindowID) -> CGSize { CGSize(width: 1, height: 1) }
+
+        // Side by side, same fixtures `freeSpace` above already exercises:
+        // A (windowID 1) at sgLeftZone, B (windowID 40) at sgRightZone,
+        // `sgGap` between them.
+        let slrRightNeighbour = SnapGroupMember(windowID: 40, action: .rightHalf, frame: sgRightZone)
+        let slrSideGroup = SnapGroup(screenID: 1, members: [sgLeftMember, slrRightNeighbour])
+
+        // Grow right: A's right edge moves out by 40pt; B's left edge
+        // follows by the same 40pt and B shrinks by 40pt, staying `sgGap`
+        // away from A the whole time (spec §6's own worked example).
+        let slrGrown = CGRect(x: sgLeftZone.minX, y: sgLeftZone.minY,
+                              width: sgLeftZone.width + 40, height: sgLeftZone.height)
+        let slrGrowAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrGrown,
+            group: slrSideGroup, gap: sgGap,
+            currentFrames: [1: slrGrown, 40: sgRightZone], minimumSize: slrNoMinimum)
+        expect(slrGrowAdjustments == [.init(windowID: 40,
+                                            frame: CGRect(x: sgRightZone.minX + 40, y: sgRightZone.minY,
+                                                          width: sgRightZone.width - 40, height: sgRightZone.height))],
+               "growing the left window right by 40pt moves the right neighbour's left edge by the same " +
+               "40pt and shrinks it by 40pt, with no adjustment needed for the resized window itself")
+
+        // Shrink right: the mirror image — A gives width back, B grows to
+        // reclaim exactly what A gave up.
+        let slrShrunk = CGRect(x: sgLeftZone.minX, y: sgLeftZone.minY,
+                               width: sgLeftZone.width - 30, height: sgLeftZone.height)
+        let slrShrinkAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrShrunk,
+            group: slrSideGroup, gap: sgGap,
+            currentFrames: [1: slrShrunk, 40: sgRightZone], minimumSize: slrNoMinimum)
+        expect(slrShrinkAdjustments == [.init(windowID: 40,
+                                              frame: CGRect(x: sgRightZone.minX - 30, y: sgRightZone.minY,
+                                                            width: sgRightZone.width + 30, height: sgRightZone.height))],
+               "shrinking the left window's right edge by 30pt grows the right neighbour by the same 30pt")
+
+        // Grow down: same shape, vertical axis — A (top) and B (bottom).
+        let slrBottomNeighbour = SnapGroupMember(windowID: 41, action: .bottomHalf, frame: sgBottomZone)
+        let slrTopMemberForResize = SnapGroupMember(windowID: 2, action: .topHalf, frame: sgTopZone)
+        let slrStackedGroup = SnapGroup(screenID: 1, members: [slrTopMemberForResize, slrBottomNeighbour])
+        // AppKit's Y axis increases upward, so "downward" from the top
+        // window's own zone means its minY edge — the one shared with the
+        // bottom neighbour below it — moves lower while its own maxY (the
+        // screen's own top edge) stays put, exactly like `sgTopGrown` above.
+        let slrGrownDown = CGRect(x: sgTopZone.minX, y: sgTopZone.minY - 25,
+                                  width: sgTopZone.width, height: sgTopZone.height + 25)
+        let slrGrowDownAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 2, oldFrame: sgTopZone, newFrame: slrGrownDown,
+            group: slrStackedGroup, gap: sgGap,
+            currentFrames: [2: slrGrownDown, 41: sgBottomZone], minimumSize: slrNoMinimum)
+        expect(slrGrowDownAdjustments == [.init(windowID: 41,
+                                                frame: CGRect(x: sgBottomZone.minX, y: sgBottomZone.minY,
+                                                              width: sgBottomZone.width, height: sgBottomZone.height - 25))],
+               "growing the top window downward by 25pt moves the bottom neighbour's top edge down by the " +
+               "same 25pt, shrinking it by 25pt from the top while its own bottom edge stays put")
+
+        // Corner resize on both axes: the bottomRight quarter grows both
+        // left (into bottomLeft) and up (into topRight) at once — both
+        // direct neighbours move, the untouched topLeft (only a corner
+        // touch) does not even appear in `sgQuartersGroup`.
+        let slrCornerGroup = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 3, action: .bottomLeft, frame: sgBottomLeftZone),
+            SnapGroupMember(windowID: 4, action: .topRight, frame: sgTopRightZone),
+            SnapGroupMember(windowID: 5, action: .bottomRight, frame: sgBottomRightZone),
+        ])
+        let slrCornerGrown = CGRect(x: sgBottomRightZone.minX - 15, y: sgBottomRightZone.minY,
+                                    width: sgBottomRightZone.width + 15, height: sgBottomRightZone.height + 10)
+        let slrCornerAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 5, oldFrame: sgBottomRightZone, newFrame: slrCornerGrown,
+            group: slrCornerGroup, gap: sgGap,
+            currentFrames: [3: sgBottomLeftZone, 4: sgTopRightZone, 5: slrCornerGrown],
+            minimumSize: slrNoMinimum)
+        expect(Set(slrCornerAdjustments.map(\.windowID)) == [3, 4],
+               "a corner window resizing on both axes at once adjusts both its direct neighbours " +
+               "(bottomLeft on X, topRight on Y) and nothing else")
+        expect(slrCornerAdjustments.first { $0.windowID == 3 }?.frame.width == sgBottomLeftZone.width - 15,
+               "the horizontal neighbour shrinks by exactly the corner window's leftward growth")
+        expect(slrCornerAdjustments.first { $0.windowID == 4 }?.frame.height == sgTopRightZone.height - 10,
+               "the vertical neighbour shrinks by exactly the corner window's upward growth")
+
+        // Neighbour at minimum size: B can only shrink to 300pt wide, but A
+        // asks for 40pt more than that leaves — B stops at its minimum and
+        // A itself gets pulled back so the shared edge stays flush with no
+        // overlap, instead of B refusing outright and the two frames
+        // overlapping by the difference.
+        func slrRightMinimum(_ windowID: CGWindowID) -> CGSize {
+            windowID == 40 ? CGSize(width: 300, height: 1) : CGSize(width: 1, height: 1)
+        }
+        let slrOverGrown = CGRect(x: sgLeftZone.minX, y: sgLeftZone.minY,
+                                  width: sgRightZone.width + sgLeftZone.width - 300 + 40, height: sgLeftZone.height)
+        let slrClampedAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrOverGrown,
+            group: slrSideGroup, gap: sgGap,
+            currentFrames: [1: slrOverGrown, 40: sgRightZone], minimumSize: slrRightMinimum)
+        let slrClampedNeighbour = slrClampedAdjustments.first { $0.windowID == 40 }
+        let slrClampedResized = slrClampedAdjustments.first { $0.windowID == 1 }
+        expect(slrClampedNeighbour?.frame.width == 300,
+               "the neighbour stops shrinking exactly at its own minimum width instead of going smaller")
+        expect(slrClampedResized != nil && slrClampedNeighbour != nil
+               && abs(slrClampedResized!.frame.maxX - (slrClampedNeighbour!.frame.minX - sgGap)) <= 0.01,
+               "the resized window is pulled back to stay flush with the clamped neighbour, leaving no overlap")
+
+        // Non-shared edge no-op: A's *left* edge (facing open screen, no
+        // neighbour there) moves; the touching right edge never changed, so
+        // nothing in the group is adjusted.
+        let slrLeftEdgeMoved = CGRect(x: sgLeftZone.minX - 20, y: sgLeftZone.minY,
+                                      width: sgLeftZone.width + 20, height: sgLeftZone.height)
+        expect(SnapLinkedResizeSupport.adjustments(resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrLeftEdgeMoved,
+                                                    group: slrSideGroup, gap: sgGap,
+                                                    currentFrames: [1: slrLeftEdgeMoved, 40: sgRightZone],
+                                                    minimumSize: slrNoMinimum).isEmpty,
+               "resizing an edge that faces open screen, not a neighbour, produces no adjustments")
+
+        // Move, not resize: same size, different origin — spec §6 links a
+        // resize only; a plain drag must fall through to the existing
+        // overlap-based prune untouched.
+        let slrMoved = CGRect(x: sgLeftZone.minX + 50, y: sgLeftZone.minY + 50,
+                              width: sgLeftZone.width, height: sgLeftZone.height)
+        expect(SnapLinkedResizeSupport.adjustments(resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrMoved,
+                                                    group: slrSideGroup, gap: sgGap,
+                                                    currentFrames: [1: slrMoved, 40: sgRightZone],
+                                                    minimumSize: slrNoMinimum).isEmpty,
+               "moving a snapped window without resizing it never links its neighbour")
 
         // MARK: Window move and resize gestures
 
