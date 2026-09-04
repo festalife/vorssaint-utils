@@ -88,17 +88,80 @@ enum SnapAssistSupport {
         }
     }
 
-    /// Which of `cells` (in their given order, which is `siblingZones`'
-    /// reading order) still has no member — the one cell Snap Assist offers
-    /// right now. Windows compiles free cells one at a time, never all at
-    /// once (spec §4 point 2): re-deriving this from the *current* group
-    /// membership on every call, rather than tracking a separate queue,
-    /// means a Snap Assist pick — which itself joins the group — advances
-    /// to the next cell for free, and a window snapped by hand into one of
-    /// the remaining cells is picked up the same way.
-    static func nextFreeCell(in cells: [WindowLayoutAction],
-                             occupied: Set<WindowLayoutAction>) -> WindowLayoutAction? {
-        cells.first { !occupied.contains($0) }
+    /// A Snap Assist session (spec §4): which cells of ONE layout family, on
+    /// ONE screen, are still open for picking. Started by exactly one
+    /// user-initiated placement and never re-derived from ambient Snap
+    /// Group state afterward, unlike an earlier version of this feature —
+    /// re-deriving "which cell is next" from live group membership on every
+    /// placement could loop: drag a window right, then drag a second one
+    /// left by hand, and the overlay asking for "the left side" could keep
+    /// reappearing if a group member's tracked membership ever drifted out
+    /// of step with where the window actually was. A session, which only
+    /// ever changes through `pick`, cannot drift — its own list of free
+    /// cells is the single source of truth for as long as it is open.
+    ///
+    /// There is no `end` operation: an ended session simply *is* `nil`.
+    /// `WindowLayoutService` stores `SnapAssistSession?` and clears it on
+    /// Esc, a click outside, an app switch, the inactivity timeout (all via
+    /// `SnapAssistPanel.onDismiss`), or a fresh `start` superseding it.
+    struct SnapAssistSession: Equatable {
+        let screenID: CGDirectDisplayID
+        /// The layout's other cells not yet picked, in reading order. The
+        /// one the user just placed into, and every sibling some window
+        /// already covered when the session `start`ed, are never in here.
+        private(set) var freeCells: [WindowLayoutAction]
+
+        /// The cell Snap Assist is currently offering, or `nil` once every
+        /// free cell has been picked.
+        var currentCell: WindowLayoutAction? { freeCells.first }
+        var isFinished: Bool { freeCells.isEmpty }
+
+        /// Begins a session for a user-initiated placement of `action` on
+        /// `screenID`. `occupiedCells` are `action`'s sibling cells
+        /// (`siblingZones(of:)`) that some window — a Snap Group member or
+        /// not — already covers at least half of (`cellIsOccupied`); those
+        /// are never offered, matching Windows: a cell someone already
+        /// parked a window in on purpose is not up for grabs. Returns `nil`
+        /// when `action` has no siblings at all, or when every sibling is
+        /// already occupied — there is nothing to open a session over
+        /// (halves, both halves filled: no overlay).
+        static func start(from action: WindowLayoutAction,
+                          screenID: CGDirectDisplayID,
+                          occupiedCells: Set<WindowLayoutAction>) -> SnapAssistSession? {
+            let free = siblingZones(of: action).filter { !occupiedCells.contains($0) }
+            guard !free.isEmpty else { return nil }
+            return SnapAssistSession(screenID: screenID, freeCells: free)
+        }
+
+        /// The session after `cell` is filled, by a Snap Assist pick or by
+        /// the person snapping a window into it by hand. `cell` is taken as
+        /// a parameter, not assumed to be `currentCell`, so a caller that
+        /// picks something unrelated to this session (a placement on a
+        /// different cell entirely) leaves the session unchanged rather
+        /// than silently advancing the wrong one.
+        func pick(_ cell: WindowLayoutAction) -> SnapAssistSession {
+            guard cell == currentCell else { return self }
+            var copy = self
+            copy.freeCells.removeFirst()
+            return copy
+        }
+    }
+
+    /// Whether some window in `frames` (AppKit space, matching `cellFrame`)
+    /// already covers at least half of `cellFrame` — a session's own
+    /// occupancy test at `start`. Any window counts, whether or not it is a
+    /// Snap Group member: unlike phase 2's neighbour-adjacency test (which
+    /// only ever needs to reason about group members shrinking each other's
+    /// free space), a fresh session has to catch a window the person put
+    /// there by hand outside any group too.
+    static func cellIsOccupied(cellFrame: CGRect, by frames: [CGRect]) -> Bool {
+        let cellArea = cellFrame.width * cellFrame.height
+        guard cellArea > 0 else { return false }
+        return frames.contains { frame in
+            let overlap = cellFrame.intersection(frame)
+            guard !overlap.isNull, !overlap.isEmpty else { return false }
+            return (overlap.width * overlap.height) / cellArea >= 0.5
+        }
     }
 
     /// The other open windows worth offering for a cell, most recently used

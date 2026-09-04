@@ -65,6 +65,19 @@ final class SnapAssistPanel {
     private var suppressResignDismissUntil: TimeInterval = 0
     private static let resignSuppressionWindow: TimeInterval = 1.0
 
+    /// Fires once at the end of every `hide()` that actually closed a
+    /// visible panel — Esc, a click outside (`didResignKeyNotification`),
+    /// an app switch (the same notification), the inactivity timer, a
+    /// screen-parameters change, or `WindowLayoutService` closing the
+    /// overlay itself because a Snap Assist session ended. Never fires from
+    /// `show()` re-filling an already-visible panel to advance to the next
+    /// free cell, since that path never calls `hide()` at all — see
+    /// `show`'s own doc comment. `WindowLayoutService` uses this as the
+    /// single place its `snapAssistSession` is cleared, so a dismissal this
+    /// panel notices on its own (Esc, losing key) ends the session exactly
+    /// as reliably as one `WindowLayoutService` itself decided on.
+    var onDismiss: (() -> Void)?
+
     /// Spec §4 point 4: eight seconds of inactivity closes the overlay and
     /// leaves the space free, the same as Esc or a click elsewhere.
     private static let inactivityTimeout: TimeInterval = 8
@@ -82,9 +95,9 @@ final class SnapAssistPanel {
     /// with `items` (already ordered most-recently-used first, spec §4
     /// point 1) and `hint` as its footer. `onSelect` fires on every pick —
     /// the caller decides whether that closes the overlay (a successful
-    /// placement re-enters `showSnapAssistIfNeeded`, which shows the next
-    /// cell or hides) or leaves it open (a failed one, so the person can
-    /// try another window).
+    /// placement re-enters `handleSnapAssist`, which shows the next cell or
+    /// hides) or leaves it open (a failed one, so the person can try
+    /// another window).
     func show(in freeRect: CGRect,
              on screen: NSScreen,
              items: [SwitcherItem],
@@ -139,6 +152,7 @@ final class SnapAssistPanel {
         removeMonitors()
         guard let panel, panel.isVisible else { return }
         panel.orderOut(nil)
+        onDismiss?()
     }
 
     /// The panel's frame for `itemCount` items covering `freeRect`, and the

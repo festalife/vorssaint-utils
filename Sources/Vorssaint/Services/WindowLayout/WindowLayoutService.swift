@@ -76,6 +76,12 @@ final class WindowLayoutService: ObservableObject {
     /// drag starting elsewhere, an app switch, or eight seconds of
     /// inactivity), so it is created lazily and otherwise left alone here.
     private var snapAssistPanel: SnapAssistPanel?
+    /// The Snap Assist session currently open, if any — see
+    /// `SnapAssistSupport.SnapAssistSession`'s own doc comment for why this
+    /// is the single source of truth for which cell is offered next,
+    /// instead of re-deriving it from Snap Group membership on every
+    /// placement. `nil` whenever nothing is open.
+    private var snapAssistSession: SnapAssistSupport.SnapAssistSession?
     /// One Snap Group per physical display, in memory only — cleared on
     /// relaunch like the rest of this service's session state. Keyed by
     /// display id rather than `NSScreen` identity, which AppKit is free to
@@ -299,7 +305,8 @@ final class WindowLayoutService: ObservableObject {
                                 to target: WindowLayoutTarget,
                                 visibleFrame: NSRect,
                                 historyFrame: WindowLayoutFrame? = nil,
-                                cyclesRepeatedAction: Bool = true) -> WindowLayoutResult {
+                                cyclesRepeatedAction: Bool = true,
+                                fromSnapAssist: Bool = false) -> WindowLayoutResult {
         let currentRect = appKitFrame(fromAX: target.frame)
         let previousAction = cyclesRepeatedAction ? lastActions[target.key] : nil
         let effectiveAction = WindowLayoutGeometry.effectiveAction(for: action,
@@ -334,11 +341,16 @@ final class WindowLayoutService: ObservableObject {
             // exactly the signal spec §4 wants (never for maximize,
             // restore, full screen or center, none of which reach this
             // branch: they are handled earlier in `apply(_:)` and never
-            // call `applyPlacement`).
-            showSnapAssistIfNeeded(action: effectiveAction,
-                                   windowID: target.windowID,
-                                   visibleFrame: visibleFrame,
-                                   fallbackFrame: target.frame)
+            // call `applyPlacement`). `fromSnapAssist` distinguishes a pick
+            // the overlay itself just performed from every other, genuinely
+            // user-initiated path here — see `handleSnapAssist`'s own doc
+            // comment for why that distinction is what stops a session from
+            // re-triggering itself.
+            handleSnapAssist(action: effectiveAction,
+                             windowID: target.windowID,
+                             visibleFrame: visibleFrame,
+                             fallbackFrame: target.frame,
+                             fromSnapAssist: fromSnapAssist)
             return finish(.success(restored: false))
         }
         frameHistory.discardLatest(for: target.key)
@@ -813,64 +825,122 @@ final class WindowLayoutService: ObservableObject {
             && AXIsProcessTrusted()
     }
 
-    /// Opens Snap Assist for the one free cell left after `action` just
-    /// placed `windowID` successfully, if any — or closes an already open
-    /// overlay along every path that has nothing left to offer. Unlike an
-    /// earlier version of this method, there is no unconditional "close
-    /// first" at the top: `SnapAssistPanel.show` already repositions and
-    /// re-fills an already-visible panel in place, so calling it directly
-    /// on the "advance to the next cell" path (this same method, re-entered
-    /// from `applyPlacement`'s success hook after a Snap Assist pick) never
-    /// flickers a hide-then-fade-back-in.
-    private func showSnapAssistIfNeeded(action: WindowLayoutAction,
-                                        windowID: CGWindowID,
-                                        visibleFrame: NSRect,
-                                        fallbackFrame: WindowLayoutFrame) {
+    /// Reacts to `action` just placing `windowID` successfully (spec §4):
+    /// either advances the Snap Assist session already open because Snap
+    /// Assist itself performed this placement (`fromSnapAssist`), or —
+    /// every other case — starts a brand new session for this
+    /// user-initiated placement, discarding whatever session, if any, was
+    /// open before. Never re-derives "what's next" from live Snap Group
+    /// membership the way an earlier version of this method did; see
+    /// `SnapAssistSupport.SnapAssistSession`'s own doc comment for why that
+    /// could loop.
+    private func handleSnapAssist(action: WindowLayoutAction,
+                                  windowID: CGWindowID,
+                                  visibleFrame: NSRect,
+                                  fallbackFrame: WindowLayoutFrame,
+                                  fromSnapAssist: Bool) {
         guard snapAssistEnabled,
               SnapGroupSupport.joinsGroup(action),
               let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
-        else { hideSnapAssist(); return }
+        else { snapAssistSession = nil; hideSnapAssist(); return }
 
-        let group = prunedGroup(snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID), on: screen)
-        let occupied = Set(group.members.map(\.action))
-        let cells = SnapAssistSupport.siblingZones(of: action)
-        guard let cell = SnapAssistSupport.nextFreeCell(in: cells, occupied: occupied) else {
-            hideSnapAssist()
+        if fromSnapAssist {
+            // A pick can only ever advance the session it was made from —
+            // never start a new one (spec: "placements performed by Snap
+            // Assist itself never start a new session"). A session missing
+            // entirely, or open on a different screen, means the pick
+            // somehow outlived its own session (e.g. it was dismissed
+            // between the click and this callback); nothing to advance.
+            guard var session = snapAssistSession, session.screenID == screen.displayID else {
+                snapAssistSession = nil
+                hideSnapAssist()
+                return
+            }
+            session = session.pick(action)
+            guard let cell = session.currentCell else {
+                // Every free cell in this layout is now filled — the
+                // session is finished (spec: "or, if none remain, ends the
+                // session").
+                snapAssistSession = nil
+                hideSnapAssist()
+                return
+            }
+            snapAssistSession = session
+            presentCell(cell, action: action, windowID: windowID, screen: screen,
+                       visibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
             return
         }
 
-        var excluded = Set(group.members.map(\.windowID))
-        excluded.insert(windowID)
-        let candidateIDs = SnapAssistSupport.candidates(mru: WindowUseTracker.shared.windows, excluding: excluded)
-        guard !candidateIDs.isEmpty else { hideSnapAssist(); return }
-
-        let allItems = WindowEnumerator.enumerateSwitcherWindows(groupByApp: false,
-                                                                  preservingGroupedWindows: false,
-                                                                  snapshot: WindowEnumerator.snapshot())
-        var itemsByWindowID: [CGWindowID: SwitcherItem] = [:]
-        for item in allItems {
-            // A window on another Space, or one that does not currently
-            // overlap this screen at all (a second display), is never worth
-            // offering: picking it would place it into a zone it cannot
-            // usefully reach, or one the person cannot even see right now.
-            // `item.frame` is window-server/AX global space (top-left
-            // origin), so it is converted through the same AX↔AppKit
-            // bridge every placement already uses before comparing it
-            // against `screen.frame`, which is AppKit space.
-            guard let id = item.windowID, !item.isOnHiddenSpace,
-                  SnapAssistSupport.candidateOnScreen(windowFrame: item.frame,
-                                                      menuBarScreenTopY: menuBarScreenTopY,
-                                                      screenFrame: screen.frame)
-            else { continue }
-            itemsByWindowID[id] = item
+        // A user-initiated placement always starts fresh, occupancy
+        // recomputed live from whatever is actually on screen right now —
+        // never from a Set of cells some earlier session happened to have
+        // tracked, which is what let a stale session keep re-opening
+        // itself. Superseding whatever session was open before matches
+        // spec: "starts a new session only if that layout still has free
+        // cells" — halves with both halves now filled naturally yields no
+        // session at all, ending Marco's loop.
+        let occupied = occupiedSiblingCells(of: action, on: screen, excluding: windowID)
+        guard let session = SnapAssistSupport.SnapAssistSession.start(from: action,
+                                                                       screenID: screen.displayID,
+                                                                       occupiedCells: occupied),
+              let cell = session.currentCell
+        else {
+            snapAssistSession = nil
+            hideSnapAssist()
+            return
         }
-        // `candidateIDs` is already MRU-ordered; a window absent from
-        // `itemsByWindowID` closed between being recorded and now, was
-        // filtered out just above, or was filtered out upstream (e.g.
-        // hidden by a Switcher rule) — simply skipped rather than shown as
-        // a broken card.
-        let items = candidateIDs.compactMap { itemsByWindowID[$0] }
-        guard !items.isEmpty else { hideSnapAssist(); return }
+        snapAssistSession = session
+        presentCell(cell, action: action, windowID: windowID, screen: screen,
+                   visibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
+    }
+
+    /// Which of `action`'s sibling cells (`SnapAssistSupport.siblingZones`)
+    /// already have some window — a Snap Group member or not — covering at
+    /// least half of them right now, per spec: "a cell is free only if no
+    /// window already covers ≥50% of it." Read from live on-screen window
+    /// frames (`onScreenWindows`), not from Snap Group membership, which is
+    /// only ever a record of windows *this feature* placed and would miss
+    /// one the person dragged into place by hand.
+    private func occupiedSiblingCells(of action: WindowLayoutAction,
+                                      on screen: NSScreen,
+                                      excluding windowID: CGWindowID) -> Set<WindowLayoutAction> {
+        let cells = SnapAssistSupport.siblingZones(of: action)
+        guard !cells.isEmpty else { return [] }
+        let frames = onScreenWindows(on: screen).filter { $0.windowID != windowID }.map(\.appKitFrame)
+        var occupied: Set<WindowLayoutAction> = []
+        for cell in cells {
+            let rect = WindowLayoutGeometry.rect(for: cell,
+                                                 current: screen.visibleFrame,
+                                                 visibleFrame: screen.visibleFrame,
+                                                 windowGap: WindowLayoutGaps.windowGap,
+                                                 screenGap: WindowLayoutGaps.screenGap)
+            if SnapAssistSupport.cellIsOccupied(cellFrame: rect, by: frames) {
+                occupied.insert(cell)
+            }
+        }
+        return occupied
+    }
+
+    /// Builds the candidate list and free-space rect for `cell` and either
+    /// presents it or, finding nothing worth showing, hides — the tail end
+    /// shared by both `handleSnapAssist` branches (starting a session and
+    /// advancing one).
+    private func presentCell(_ cell: WindowLayoutAction,
+                             action: WindowLayoutAction,
+                             windowID: CGWindowID,
+                             screen: NSScreen,
+                             visibleFrame: NSRect,
+                             fallbackFrame: WindowLayoutFrame) {
+        var excluded: Set<CGWindowID> = [windowID]
+        let group = prunedGroup(snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID), on: screen)
+        excluded.formUnion(group.members.map(\.windowID))
+
+        let items = snapAssistCandidates(on: screen, excluding: excluded)
+        guard !items.isEmpty else {
+            snapAssistSession = nil
+            hideSnapAssist()
+            return
+        }
 
         let theoreticalZone = WindowLayoutGeometry.rect(for: cell,
                                                         current: visibleFrame,
@@ -885,8 +955,168 @@ final class WindowLayoutService: ObservableObject {
         // Spec §9: a sliver of free space is not worth an overlay — the
         // same bailout `SnapGroupSupport.freeSpace` already applies to an
         // oversized minimum window.
-        guard SnapAssistSupport.isOfferable(freeRect: freeRect) else { hideSnapAssist(); return }
+        guard SnapAssistSupport.isOfferable(freeRect: freeRect) else {
+            snapAssistSession = nil
+            hideSnapAssist()
+            return
+        }
         presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen)
+    }
+
+    /// One window a Snap Assist candidate list or occupancy test can reason
+    /// about — window-server ground truth, not the Switcher's own
+    /// configurable view of it.
+    private struct SnapAssistWindow {
+        let windowID: CGWindowID
+        let ownerPID: pid_t
+        /// Window-server space (top-left origin, Y down) — `kCGWindowBounds`'s
+        /// own convention, matching `SwitcherItem.frame`.
+        let quartzFrame: CGRect
+        /// The same rect converted to AppKit space, for comparing against a
+        /// theoretical cell rect (`WindowLayoutGeometry.rect`).
+        let appKitFrame: CGRect
+    }
+
+    /// Every real, on-screen, layer-0 window overlapping `screen` right
+    /// now, read straight from `CGWindowListCopyWindowInfo(.optionOnScreenOnly)`
+    /// — ground truth for "what does the person actually see on this
+    /// display," independent of `WindowEnumerator`'s own Switcher-specific
+    /// visibility rules (current-Space-only, per-app hide rules, and so
+    /// on), none of which have anything to do with Snap Assist. Used both
+    /// for the occupancy test (`occupiedSiblingCells`) and, filtered
+    /// further, as the on-screen half of the candidate list
+    /// (`snapAssistCandidates`).
+    private func onScreenWindows(on screen: NSScreen) -> [SnapAssistWindow] {
+        guard let raw = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]]
+        else { return [] }
+        return raw.compactMap { info -> SnapAssistWindow? in
+            guard (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let windowID = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                  let ownerPID = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                  let quartzFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+            else { return nil }
+            let appKit = appKitFrame(fromAX: WindowLayoutFrame(origin: quartzFrame.origin, size: quartzFrame.size))
+            guard screen.frame.intersects(appKit) else { return nil }
+            return SnapAssistWindow(windowID: windowID, ownerPID: ownerPID,
+                                    quartzFrame: quartzFrame, appKitFrame: appKit)
+        }
+    }
+
+    /// A window's title via Accessibility, the same source `WindowEnumerator`
+    /// itself reads from — never `kCGWindowName`, which needs Screen
+    /// Recording permission to be populated at all on a modern macOS.
+    private func windowTitle(windowID: CGWindowID, in axApp: AXUIElement) -> String? {
+        guard let window = axElement(windowID: windowID, in: axApp) else { return nil }
+        return stringAttribute(window, kAXTitleAttribute as String)
+    }
+
+    /// Debug record of one enumerated window and, if it was left out of the
+    /// final candidate list, why — the field diagnosis spec §4 point 2
+    /// asked for directly: "a debug log listing enumerated vs offered
+    /// window IDs with the drop reason."
+    private static let snapAssistCandidateLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "vorssaint",
+                                                        category: "snap-assist-candidates")
+
+    /// Every window worth offering on `screen`: every on-screen, layer-0
+    /// window there (`onScreenWindows`) plus every minimized window
+    /// belonging to a regular running app (never in `.optionOnScreenOnly`
+    /// by definition, so a separate Accessibility walk finds them), minus
+    /// `excluded` — the window just placed, and every current Snap Group
+    /// member. Deliberately bypasses `WindowEnumerator` entirely: both of
+    /// its own entry points read `switcherCurrentSpaceOnly` and apply the
+    /// Switcher's own per-app rules regardless of caller, neither of which
+    /// spec §4 point 2 wants here. Ordered most recently used first
+    /// (`WindowUseTracker`), with anything MRU never heard of appended
+    /// after, on-screen before minimized.
+    private func snapAssistCandidates(on screen: NSScreen, excluding excluded: Set<CGWindowID>) -> [SwitcherItem] {
+        var itemsByWindowID: [CGWindowID: SwitcherItem] = [:]
+        var enumeratedIDs: [CGWindowID] = []
+        var dropped: [CGWindowID: String] = [:]
+        var axAppsByPID: [pid_t: AXUIElement] = [:]
+        func axApp(for pid: pid_t) -> AXUIElement {
+            if let existing = axAppsByPID[pid] { return existing }
+            let created = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(created, 0.35)
+            axAppsByPID[pid] = created
+            return created
+        }
+
+        for window in onScreenWindows(on: screen) {
+            enumeratedIDs.append(window.windowID)
+            guard window.ownerPID != ProcessInfo.processInfo.processIdentifier else {
+                dropped[window.windowID] = "owned by Vorssaint itself"
+                continue
+            }
+            guard !excluded.contains(window.windowID) else {
+                dropped[window.windowID] = "excluded (just placed or Snap Group member)"
+                continue
+            }
+            guard let app = NSRunningApplication(processIdentifier: window.ownerPID), !app.isTerminated,
+                  app.activationPolicy == .regular
+            else {
+                dropped[window.windowID] = "owner is not a regular running app"
+                continue
+            }
+            let title = windowTitle(windowID: window.windowID, in: axApp(for: window.ownerPID)) ?? ""
+            itemsByWindowID[window.windowID] = .window(id: window.windowID,
+                                                       title: title,
+                                                       appName: app.localizedName ?? "",
+                                                       pid: window.ownerPID,
+                                                       isOnScreen: true,
+                                                       frame: window.quartzFrame)
+        }
+
+        // Minimized windows never appear in `.optionOnScreenOnly` by
+        // definition (spec §4 point 2: "plus minimized windows of running
+        // apps"), so a separate Accessibility walk over every regular
+        // running app finds them. Not filtered to this screen — a
+        // minimized window has no meaningful on-screen position to test
+        // against one.
+        for app in NSWorkspace.shared.runningApplications
+            where app.activationPolicy == .regular
+                && !app.isTerminated
+                && app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            guard let windows = windowsAttribute(axApp(for: app.processIdentifier)) else { continue }
+            for window in windows {
+                guard boolAttribute(window, kAXMinimizedAttribute as String),
+                      let windowID = AXWindowResolver.windowID(for: window)
+                else { continue }
+                enumeratedIDs.append(windowID)
+                guard !excluded.contains(windowID) else {
+                    dropped[windowID] = "excluded (just placed or Snap Group member)"
+                    continue
+                }
+                guard itemsByWindowID[windowID] == nil else { continue }
+                let title = stringAttribute(window, kAXTitleAttribute as String) ?? ""
+                let quartzFrame = frame(of: window).map { CGRect(origin: $0.origin, size: $0.size) } ?? .zero
+                itemsByWindowID[windowID] = .window(id: windowID,
+                                                    title: title,
+                                                    appName: app.localizedName ?? "",
+                                                    pid: app.processIdentifier,
+                                                    isOnScreen: false,
+                                                    isMinimized: true,
+                                                    frame: quartzFrame)
+            }
+        }
+
+        let mru = WindowUseTracker.shared.windows.filter { itemsByWindowID[$0] != nil }
+        var ordered = mru.compactMap { itemsByWindowID[$0] }
+        let mruSet = Set(mru)
+        ordered.append(contentsOf: itemsByWindowID.keys.filter { !mruSet.contains($0) }.compactMap { itemsByWindowID[$0] })
+
+        if Self.snapAssistDebugLogging {
+            let offeredIDs = Set(ordered.compactMap(\.windowID))
+            let lines = enumeratedIDs.map { id -> String in
+                if offeredIDs.contains(id) { return "  windowID=\(id) -> offered" }
+                return "  windowID=\(id) -> dropped (\(dropped[id] ?? "not found in final candidate map"))"
+            }
+            Self.snapAssistCandidateLog.debug(
+                "Snap Assist candidates on screen \(screen.displayID): \(lines.joined(separator: "\n"), privacy: .public)")
+        }
+
+        return ordered
     }
 
     private func presentSnapAssist(cell: WindowLayoutAction,
@@ -895,6 +1125,7 @@ final class WindowLayoutService: ObservableObject {
                                    screen: NSScreen) {
         let panel = snapAssistPanel ?? {
             let created = SnapAssistPanel()
+            created.onDismiss = { [weak self] in self?.snapAssistSession = nil }
             snapAssistPanel = created
             return created
         }()
@@ -996,7 +1227,7 @@ final class WindowLayoutService: ObservableObject {
             return finish(.failure(.noWindow))
         }
         pruneWindowState(keeping: target.key)
-        return applyPlacement(action, to: target, visibleFrame: screen.visibleFrame)
+        return applyPlacement(action, to: target, visibleFrame: screen.visibleFrame, fromSnapAssist: true)
     }
 
     /// Un-minimizes and raises `window` directly through the AXUIElement

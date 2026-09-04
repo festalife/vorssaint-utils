@@ -6406,22 +6406,86 @@ struct MetricsTests {
                },
                "every action that never joins a group also has no sibling zones to offer")
 
-        // End-to-end: siblingZones feeds directly into nextFreeCell, the
-        // way `showSnapAssistIfNeeded` actually chains them, walking a full
-        // quarters layout from the first placement to the last free cell.
+        // End-to-end: siblingZones feeds directly into SnapAssistSession.start,
+        // the way `handleSnapAssist` actually chains them, walking a full
+        // quarters layout from the first placement to the last free cell
+        // purely by picking — never by re-deriving occupancy mid-session.
         let saQuarterCells = SnapAssistSupport.siblingZones(of: .topLeft)
-        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells, occupied: []) == .topRight,
-               "fresh from topLeft, the first sibling in reading order is offered")
-        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells, occupied: [.topRight]) == .bottomLeft,
-               "once topRight is also taken, bottomLeft is offered next")
-        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells, occupied: [.topRight, .bottomLeft]) == .bottomRight,
-               "with three of four quarters taken, the last one is offered")
-        expect(SnapAssistSupport.nextFreeCell(in: saQuarterCells,
-                                              occupied: [.topRight, .bottomLeft, .bottomRight]) == nil,
-               "once every sibling of topLeft is occupied, nothing more is offered")
-        expect(SnapAssistSupport.nextFreeCell(in: SnapAssistSupport.siblingZones(of: .leftHalf),
-                                              occupied: [.rightHalf]) == nil,
-               "a half's one sibling already taken leaves nothing left to offer")
+        var saQuarterSession = SnapAssistSupport.SnapAssistSession.start(from: .topLeft, screenID: 1, occupiedCells: [])
+        expect(saQuarterSession?.freeCells == saQuarterCells,
+               "fresh from topLeft, every sibling in reading order is free")
+        expect(saQuarterSession?.currentCell == .topRight,
+               "the first sibling in reading order is offered")
+        saQuarterSession = saQuarterSession?.pick(.topRight)
+        expect(saQuarterSession?.currentCell == .bottomLeft,
+               "once topRight is picked, bottomLeft is offered next")
+        saQuarterSession = saQuarterSession?.pick(.bottomLeft)
+        expect(saQuarterSession?.currentCell == .bottomRight,
+               "with two of three siblings picked, the last one is offered")
+        saQuarterSession = saQuarterSession?.pick(.bottomRight)
+        expect(saQuarterSession?.isFinished == true && saQuarterSession?.currentCell == nil,
+               "once every sibling of topLeft is picked, the session is finished")
+        expect(SnapAssistSupport.SnapAssistSession.start(from: .leftHalf, screenID: 1,
+                                                          occupiedCells: [.rightHalf]) == nil,
+               "a half's one sibling already occupied at start leaves nothing to open a session over")
+        expect(SnapAssistSupport.SnapAssistSession.start(from: .maximize, screenID: 1, occupiedCells: []) == nil,
+               "an action with no siblings never opens a session")
+
+        // pick() only ever advances the cell it names, matching currentCell —
+        // a pick for anything else (a different cell placed by hand, or a
+        // stale/foreign session) leaves the session untouched rather than
+        // silently skipping ahead.
+        let saUnrelatedPick = SnapAssistSupport.SnapAssistSession.start(from: .leftHalf, screenID: 1,
+                                                                        occupiedCells: [])
+        expect(saUnrelatedPick?.pick(.leftHalf) == saUnrelatedPick,
+               "picking a cell that is not currentCell (rightHalf, not leftHalf) leaves the session unchanged")
+
+        expect(SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                                by: [CGRect(x: 0, y: 0, width: 100, height: 100)]),
+               "a window exactly covering the cell occupies it")
+        expect(SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                                by: [CGRect(x: 0, y: 0, width: 60, height: 100)]),
+               "a window covering exactly half the cell's area still counts as occupying it")
+        expect(!SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                                 by: [CGRect(x: 0, y: 0, width: 40, height: 100)]),
+               "a window covering less than half the cell does not occupy it")
+        expect(!SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100), by: []),
+               "no windows at all means nothing occupies the cell")
+        expect(!SnapAssistSupport.cellIsOccupied(cellFrame: .zero,
+                                                 by: [CGRect(x: 0, y: 0, width: 100, height: 100)]),
+               "a degenerate zero-area cell is never counted as occupied")
+
+        // Marco's exact loop report, spelled out as the two sequences the
+        // session state machine has to get right end to end:
+        //
+        // (1) right-half user snap opens a session with one free cell
+        //     (left); the person then drags a SECOND window into the left
+        //     half by hand (not a Snap Assist pick — fromSnapAssist is
+        //     false in `handleSnapAssist`, so this is a fresh `start`, not
+        //     a `pick`) and halves are now full: no session, no overlay.
+        let saRightHalfSession = SnapAssistSupport.SnapAssistSession.start(from: .rightHalf, screenID: 1,
+                                                                            occupiedCells: [])
+        expect(saRightHalfSession?.freeCells == [.leftHalf],
+               "snapping right by hand opens a session offering exactly the left half")
+        let saLeftHandDragStart = SnapAssistSupport.SnapAssistSession.start(from: .leftHalf, screenID: 1,
+                                                                             occupiedCells: [.rightHalf])
+        expect(saLeftHandDragStart == nil,
+               "dragging a second window left by hand, with the right half already occupied, opens no " +
+               "session at all — the exact case that used to loop by re-deriving 'what's left' instead " +
+               "of ending outright")
+
+        // (2) left-half snap opens a session (right free) → picking a
+        //     candidate places it right, which is a Snap Assist pick, so it
+        //     only ever advances THIS session (never starts a new one) —
+        //     and with no cell left after that pick, the session ends.
+        var saLeftHalfSession = SnapAssistSupport.SnapAssistSession.start(from: .leftHalf, screenID: 1,
+                                                                           occupiedCells: [])
+        expect(saLeftHalfSession?.currentCell == .rightHalf,
+               "snapping left opens a session offering exactly the right half")
+        saLeftHalfSession = saLeftHalfSession?.pick(.rightHalf)
+        expect(saLeftHalfSession?.isFinished == true,
+               "picking the offered right half finishes the session — no cell left, so the overlay closes " +
+               "instead of asking again")
 
         expect(SnapAssistSupport.isOfferable(freeRect: CGRect(x: 0, y: 0, width: 400, height: 300)),
                "a roomy free rect is worth an overlay")
@@ -6455,16 +6519,6 @@ struct MetricsTests {
                                                      menuBarScreenTopY: 982,
                                                      screenFrame: saScreenFrame),
                "a window whose AX y is far below the menu bar's top converts below the screen and does not pass")
-
-        let saCells: [WindowLayoutAction] = [.topRight, .bottomLeft, .bottomRight]
-        expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: []) == .topRight,
-               "with nothing occupied yet, the first cell in reading order is offered")
-        expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: [.topRight]) == .bottomLeft,
-               "once a cell is filled, the next one in order is offered")
-        expect(SnapAssistSupport.nextFreeCell(in: saCells, occupied: [.topRight, .bottomLeft, .bottomRight]) == nil,
-               "once every cell is filled, none remain to offer")
-        expect(SnapAssistSupport.nextFreeCell(in: [], occupied: []) == nil,
-               "an action with no siblings never offers a cell")
 
         expect(SnapAssistSupport.candidates(mru: [3, 1, 2], excluding: [1]) == [3, 2],
                "MRU order is kept, minus every excluded window")
