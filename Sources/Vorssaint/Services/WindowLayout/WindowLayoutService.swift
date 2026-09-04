@@ -2942,6 +2942,11 @@ final class WindowLayoutService: ObservableObject {
         zoomHoverPanelActive = false
         zoomHoverStartedAt = nil
         zoomHoverCache = nil
+        dividerHintPanel?.orderOut(nil)
+        dividerHintPanel = nil
+        dividerHintActive = false
+        dividerHintStartedAt = nil
+        dividerHintCachedHint = nil
         if let edgeSnapRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), edgeSnapRunLoopSource, .commonModes)
         }
@@ -2976,7 +2981,10 @@ final class WindowLayoutService: ObservableObject {
         // the drag bookkeeping that follows.
         if type == .mouseMoved {
             let location = event.location
-            DispatchQueue.main.async { [weak self] in self?.handleZoomHoverMouseMoved(atQuartzPoint: location) }
+            DispatchQueue.main.async { [weak self] in
+                self?.handleZoomHoverMouseMoved(atQuartzPoint: location)
+                self?.handleDividerHintMouseMoved(atQuartzPoint: location)
+            }
             return Unmanaged.passUnretained(event)
         }
         // A press or release is also always relevant to a hover-shown Snap
@@ -3556,6 +3564,124 @@ final class WindowLayoutService: ObservableObject {
         _ = applyPlacement(hit.action, to: target, visibleFrame: screen.visibleFrame)
     }
 
+    // MARK: - Snap Group divider hint (spec §6/§12)
+
+    private var dividerHintPanel: NSPanel?
+    private var dividerHintActive = false
+    private var dividerHintStartedAt: TimeInterval?
+    private var dividerHintCachedHint: SnapDividerHintSupport.DividerHint?
+    private var dividerHintLastSampleAt: TimeInterval = 0
+    private static let dividerHintSampleInterval: TimeInterval = 1.0 / 20.0
+    /// Spec §1's own "~150 ms of dwell" figure, reused here for the same
+    /// kind of hover-confirmation pause rather than inventing a second
+    /// number with no stated reason to differ.
+    private static let dividerHintDwellInterval: TimeInterval = 0.15
+    private static let dividerHintTolerance: CGFloat = 6
+
+    private var dividerHintEnabled: Bool {
+        AppFeature.windowLayout.isAvailable
+            && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapDividerHint)
+            && AXIsProcessTrusted()
+    }
+
+    /// The other half of the mouseMoved sample `handleZoomHoverMouseMoved`
+    /// already receives: independent of it (a person can be near a zoom
+    /// button or a group seam, never usefully both at once, but neither
+    /// path assumes the other ran), and gated the same way — cancels
+    /// itself the moment a real drag starts, since dragging a boundary is
+    /// exactly what Phase 5's linked resize already reacts to, and a hint
+    /// bar drawn on top of that would only be visual noise.
+    private func handleDividerHintMouseMoved(atQuartzPoint point: CGPoint) {
+        guard dividerHintEnabled, edgeSnapDrag == nil, edgeSnapPressOrigin == nil else {
+            cancelDividerHint()
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - dividerHintLastSampleAt >= Self.dividerHintSampleInterval else { return }
+        dividerHintLastSampleAt = now
+
+        let hoverPoint = appKitPoint(fromQuartz: point)
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(hoverPoint) }),
+              let group = snapGroups[screen.displayID],
+              group.members.count >= 2
+        else {
+            cancelDividerHint()
+            return
+        }
+        // The same cached, throttled live-frame read `freeSpaceAdjusted`
+        // already pays for during a drag — reused here rather than a
+        // second Accessibility sweep, since the seam a person actually
+        // sees has to be between real, possibly-resized frames, never the
+        // fixed zone a member joined the group with.
+        let liveFrames = currentFrames(for: group, on: screen).frames
+        let members = group.members.compactMap { member -> (windowID: CGWindowID, frame: CGRect)? in
+            guard let frame = liveFrames[member.windowID] else { return nil }
+            return (member.windowID, frame)
+        }
+        guard let hint = SnapDividerHintSupport.dividerHint(at: hoverPoint, members: members,
+                                                             tolerance: Self.dividerHintTolerance)
+        else {
+            cancelDividerHint()
+            return
+        }
+        if dividerHintCachedHint != hint {
+            dividerHintStartedAt = now
+            dividerHintCachedHint = hint
+        }
+        guard let startedAt = dividerHintStartedAt,
+              SnapLayoutPresets.hoverDwellElapsed(startedAt: startedAt, now: now, dwell: Self.dividerHintDwellInterval)
+        else { return }
+        presentDividerHint(hint)
+    }
+
+    private func presentDividerHint(_ hint: SnapDividerHintSupport.DividerHint) {
+        let panel = dividerHintPanel ?? {
+            let created = makeDividerHintPanel()
+            dividerHintPanel = created
+            return created
+        }()
+        if panel.frame != hint.frame {
+            panel.setFrame(hint.frame, display: true)
+        }
+        if !panel.isVisible {
+            panel.orderFrontRegardless()
+        }
+        dividerHintActive = true
+    }
+
+    /// Hides the bar (spec §12: "the bar hides on mouse down") and resets
+    /// every piece of dwell-tracking state — safe to call whenever anything
+    /// means the hint no longer applies, including when nothing was
+    /// showing to begin with.
+    private func cancelDividerHint() {
+        dividerHintStartedAt = nil
+        dividerHintCachedHint = nil
+        guard dividerHintActive else { return }
+        dividerHintActive = false
+        dividerHintPanel?.orderOut(nil)
+    }
+
+    private func makeDividerHintPanel() -> NSPanel {
+        let panel = NSPanel(contentRect: .zero,
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered,
+                            defer: false)
+        panel.backgroundColor = NSColor.white.withAlphaComponent(0.55)
+        panel.isOpaque = false
+        panel.hasShadow = false
+        // Never intercepts the click that starts a real resize drag — the
+        // app's own resize cursor and Phase 5's linked resize both keep
+        // working exactly as if this bar did not exist.
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary,
+                                    .transient, .ignoresCycle]
+        panel.animationBehavior = .none
+        return panel
+    }
+
     private func edgeSnapQuartzScreenFrames() -> [CGRect] {
         let top = menuBarScreenTopY
         return NSScreen.screens.map {
@@ -3602,6 +3728,7 @@ final class WindowLayoutService: ObservableObject {
         edgeSnapDrag = nil
         hideEdgeSnapPreview(immediately: false)
         hideSnapLayoutsPanel()
+        cancelDividerHint()
     }
 
     private func showEdgeSnapPreview(frame: CGRect) {

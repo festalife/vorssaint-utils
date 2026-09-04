@@ -7054,6 +7054,43 @@ struct MetricsTests {
                "grabbing A's own edge (not B's) still finds the free-space-placed B touching through the " +
                "theoretical zones, and shrinks B's true 812pt-wide live frame down to 612pt")
 
+        // MARK: Snap Divider Hint
+
+        let sdhLeft: (windowID: CGWindowID, frame: CGRect) = (1, CGRect(x: 0, y: 0, width: 700, height: 900))
+        let sdhRight: (windowID: CGWindowID, frame: CGRect) = (2, CGRect(x: 700, y: 0, width: 700, height: 900))
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 700, y: 450), members: [sdhLeft, sdhRight])
+                   == SnapDividerHintSupport.DividerHint(
+                       frame: CGRect(x: 698.5, y: 0, width: 3, height: 900), isVertical: true),
+               "a point right on a flush left/right seam finds a vertical divider spanning the shared height")
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 704, y: 450), members: [sdhLeft, sdhRight]) != nil,
+               "within tolerance of the seam still finds it")
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 720, y: 450), members: [sdhLeft, sdhRight]) == nil,
+               "well past tolerance finds nothing")
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 700, y: 450), members: [sdhLeft]) == nil,
+               "a single member has no seam to find at all")
+
+        let sdhGapLeft: (windowID: CGWindowID, frame: CGRect) = (1, CGRect(x: 0, y: 0, width: 400, height: 500))
+        let sdhGapRight: (windowID: CGWindowID, frame: CGRect) = (2, CGRect(x: 900, y: 0, width: 400, height: 500))
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 650, y: 250), members: [sdhGapLeft, sdhGapRight]) == nil,
+               "two frames far apart (a third window sits between them) never propose a seam at all")
+
+        let sdhTop: (windowID: CGWindowID, frame: CGRect) = (3, CGRect(x: 0, y: 500, width: 900, height: 400))
+        let sdhBottom: (windowID: CGWindowID, frame: CGRect) = (4, CGRect(x: 0, y: 0, width: 900, height: 500))
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 450, y: 500), members: [sdhTop, sdhBottom])
+                   == SnapDividerHintSupport.DividerHint(
+                       frame: CGRect(x: 0, y: 498.5, width: 900, height: 3), isVertical: false),
+               "a point on a flush top/bottom seam finds a horizontal divider spanning the shared width")
+
+        let sdhCornerA: (windowID: CGWindowID, frame: CGRect) = (5, CGRect(x: 0, y: 500, width: 700, height: 400))
+        let sdhCornerB: (windowID: CGWindowID, frame: CGRect) = (6, CGRect(x: 700, y: 0, width: 700, height: 500))
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 700, y: 500),
+                                                  members: [sdhCornerA, sdhCornerB]) == nil,
+               "two quarters touching only at a single corner point share no real border to hint")
+
+        let sdhOverlap: (windowID: CGWindowID, frame: CGRect) = (7, CGRect(x: 690, y: 0, width: 700, height: 900))
+        expect(SnapDividerHintSupport.dividerHint(at: CGPoint(x: 695, y: 450), members: [sdhLeft, sdhOverlap]) == nil,
+               "two frames overlapping (10pt past tolerance) rather than merely touching propose no seam")
+
         // MARK: Snap Restore On Drag
 
         let srodZone = CGRect(x: 0, y: 0, width: 700, height: 900)

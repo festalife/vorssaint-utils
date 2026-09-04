@@ -277,7 +277,9 @@ extension WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Dock 미리보기에서 그룹 표시",
         snapGroupsInDockCaption: "붙인 창의 Dock 아이콘을 마우스 오른쪽 버튼으로 클릭하면 그룹의 다른 모든 창을 함께 표시하는 옵션이 나타납니다.",
         snapLayoutsOnZoomButtonEnable: "확대 버튼 위에서 레이아웃 표시",
-        snapLayoutsOnZoomButtonCaption: "창의 초록색 확대 버튼 위에 약 0.5초간 마우스를 올리면 상단 가장자리로 끄는 것과 같은 Snap Layouts 패널이 나타납니다."
+        snapLayoutsOnZoomButtonCaption: "창의 초록색 확대 버튼 위에 약 0.5초간 마우스를 올리면 상단 가장자리로 끄는 것과 같은 Snap Layouts 패널이 나타납니다.",
+        snapDividerHintEnable: "붙인 창 사이에 구분선 힌트 표시",
+        snapDividerHintCaption: "두 개의 붙인 창이 만나는 경계에 마우스를 올리면 그곳을 끌어 두 창의 크기를 함께 조절할 수 있다는 얇은 막대가 나타납니다."
     )
 }
 
@@ -1266,6 +1268,8 @@ struct WindowLayoutFeatureStrings {
     let snapGroupsInDockCaption: String
     let snapLayoutsOnZoomButtonEnable: String
     let snapLayoutsOnZoomButtonCaption: String
+    let snapDividerHintEnable: String
+    let snapDividerHintCaption: String
 
     static let enUS = WindowLayoutFeatureStrings(
         title: "Window layout",
@@ -1356,7 +1360,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Show groups in Dock preview",
         snapGroupsInDockCaption: "Right-click a snapped window's Dock icon to offer showing every other window in its group too.",
         snapLayoutsOnZoomButtonEnable: "Show layouts on the maximize button",
-        snapLayoutsOnZoomButtonCaption: "Hovering a window's green maximize button for about half a second shows the same Snap Layouts panel dragging to the top edge does."
+        snapLayoutsOnZoomButtonCaption: "Hovering a window's green maximize button for about half a second shows the same Snap Layouts panel dragging to the top edge does.",
+        snapDividerHintEnable: "Show a divider hint between snapped windows",
+        snapDividerHintCaption: "Hovering the seam between two snapped windows shows a thin bar hinting that dragging from there resizes both together."
     )
 
     static let ptBR = WindowLayoutFeatureStrings(
@@ -1448,7 +1454,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Mostrar grupos na pré-visualização do Dock",
         snapGroupsInDockCaption: "Clique com o botão direito no ícone do Dock de uma janela encaixada para também oferecer mostrar as outras janelas do grupo.",
         snapLayoutsOnZoomButtonEnable: "Mostrar layouts no botão de maximizar",
-        snapLayoutsOnZoomButtonCaption: "Pairar sobre o botão verde de maximizar por cerca de meio segundo mostra o mesmo painel de Snap Layouts que arrastar até a borda superior."
+        snapLayoutsOnZoomButtonCaption: "Pairar sobre o botão verde de maximizar por cerca de meio segundo mostra o mesmo painel de Snap Layouts que arrastar até a borda superior.",
+        snapDividerHintEnable: "Mostrar uma dica de divisor entre janelas encaixadas",
+        snapDividerHintCaption: "Pairar sobre a junção entre duas janelas encaixadas mostra uma barra fina indicando que arrastar dali redimensiona as duas juntas."
     )
 
     static let tr = WindowLayoutFeatureStrings(
@@ -1540,7 +1548,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Dock önizlemesinde grupları göster",
         snapGroupsInDockCaption: "Yaslanmış bir pencerenin Dock simgesine sağ tıklamak, gruptaki diğer tüm pencereleri de gösterme seçeneği sunar.",
         snapLayoutsOnZoomButtonEnable: "Yerleşimleri büyüt düğmesinde göster",
-        snapLayoutsOnZoomButtonCaption: "Pencerenin yeşil büyüt düğmesinin üzerinde yaklaşık yarım saniye durmak, üst kenara sürüklemekle aynı Snap Layouts panelini gösterir."
+        snapLayoutsOnZoomButtonCaption: "Pencerenin yeşil büyüt düğmesinin üzerinde yaklaşık yarım saniye durmak, üst kenara sürüklemekle aynı Snap Layouts panelini gösterir.",
+        snapDividerHintEnable: "Yaslanmış pencereler arasında ayırıcı ipucu göster",
+        snapDividerHintCaption: "İki yaslanmış pencere arasındaki birleşim yerinin üzerine gelmek, oradan sürüklemenin ikisini birlikte yeniden boyutlandırdığını gösteren ince bir çubuk gösterir."
     )
 
     static let ru = WindowLayoutFeatureStrings(
@@ -1632,7 +1642,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Показывать группы в превью Dock",
         snapGroupsInDockCaption: "Щёлкните правой кнопкой значок прикреплённого окна в Dock, чтобы также показать остальные окна группы.",
         snapLayoutsOnZoomButtonEnable: "Показывать раскладки на кнопке разворачивания",
-        snapLayoutsOnZoomButtonCaption: "Наведение на зелёную кнопку разворачивания окна примерно на полсекунды показывает ту же панель Snap Layouts, что и перетаскивание к верхнему краю."
+        snapLayoutsOnZoomButtonCaption: "Наведение на зелёную кнопку разворачивания окна примерно на полсекунды показывает ту же панель Snap Layouts, что и перетаскивание к верхнему краю.",
+        snapDividerHintEnable: "Показывать подсказку-разделитель между прикреплёнными окнами",
+        snapDividerHintCaption: "Наведение на стык между двумя прикреплёнными окнами показывает тонкую полосу, подсказывающую, что перетаскивание оттуда изменяет размер обоих окон сразу."
     )
 
     static let es = WindowLayoutFeatureStrings(
@@ -1724,7 +1736,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Mostrar grupos en la vista previa del Dock",
         snapGroupsInDockCaption: "Haz clic derecho en el icono del Dock de una ventana ajustada para también mostrar las demás ventanas de su grupo.",
         snapLayoutsOnZoomButtonEnable: "Mostrar diseños en el botón de maximizar",
-        snapLayoutsOnZoomButtonCaption: "Mantener el puntero sobre el botón verde de maximizar durante medio segundo muestra el mismo panel de Snap Layouts que arrastrar al borde superior."
+        snapLayoutsOnZoomButtonCaption: "Mantener el puntero sobre el botón verde de maximizar durante medio segundo muestra el mismo panel de Snap Layouts que arrastrar al borde superior.",
+        snapDividerHintEnable: "Mostrar una pista divisoria entre ventanas ajustadas",
+        snapDividerHintCaption: "Pasar el puntero por la unión entre dos ventanas ajustadas muestra una barra fina que indica que arrastrar desde ahí las redimensiona a ambas juntas."
     )
 
     static let de = WindowLayoutFeatureStrings(
@@ -1816,7 +1830,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Gruppen in der Dock-Vorschau anzeigen",
         snapGroupsInDockCaption: "Rechtsklick auf das Dock-Symbol eines angedockten Fensters bietet an, auch alle anderen Fenster seiner Gruppe zu zeigen.",
         snapLayoutsOnZoomButtonEnable: "Layouts am Maximieren-Knopf anzeigen",
-        snapLayoutsOnZoomButtonCaption: "Etwa eine halbe Sekunde auf dem grünen Maximieren-Knopf verweilen zeigt dasselbe Snap-Layouts-Panel wie das Ziehen an den oberen Rand."
+        snapLayoutsOnZoomButtonCaption: "Etwa eine halbe Sekunde auf dem grünen Maximieren-Knopf verweilen zeigt dasselbe Snap-Layouts-Panel wie das Ziehen an den oberen Rand.",
+        snapDividerHintEnable: "Trennlinien-Hinweis zwischen angedockten Fenstern anzeigen",
+        snapDividerHintCaption: "Das Verweilen auf der Naht zwischen zwei angedockten Fenstern zeigt einen dünnen Balken, der andeutet, dass ein Ziehen von dort beide zusammen skaliert."
     )
 
     static let fr = WindowLayoutFeatureStrings(
@@ -1908,7 +1924,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Afficher les groupes dans l’aperçu du Dock",
         snapGroupsInDockCaption: "Un clic droit sur l’icône du Dock d’une fenêtre ancrée propose aussi d’afficher les autres fenêtres de son groupe.",
         snapLayoutsOnZoomButtonEnable: "Afficher les dispositions sur le bouton d’agrandissement",
-        snapLayoutsOnZoomButtonCaption: "Survoler le bouton vert d’agrandissement pendant environ une demi-seconde affiche le même panneau Snap Layouts que le glisser vers le bord supérieur."
+        snapLayoutsOnZoomButtonCaption: "Survoler le bouton vert d’agrandissement pendant environ une demi-seconde affiche le même panneau Snap Layouts que le glisser vers le bord supérieur.",
+        snapDividerHintEnable: "Afficher un indice de séparateur entre fenêtres ancrées",
+        snapDividerHintCaption: "Survoler la jointure entre deux fenêtres ancrées affiche une fine barre indiquant qu’un glisser depuis cet endroit redimensionne les deux ensemble."
     )
 
     static let it = WindowLayoutFeatureStrings(
@@ -2000,7 +2018,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Mostra i gruppi nell'anteprima del Dock",
         snapGroupsInDockCaption: "Fai clic destro sull'icona del Dock di una finestra agganciata per mostrare anche le altre finestre del suo gruppo.",
         snapLayoutsOnZoomButtonEnable: "Mostra i layout sul pulsante di ingrandimento",
-        snapLayoutsOnZoomButtonCaption: "Tenere il puntatore sul pulsante verde di ingrandimento per circa mezzo secondo mostra lo stesso pannello Snap Layouts del trascinamento verso il bordo superiore."
+        snapLayoutsOnZoomButtonCaption: "Tenere il puntatore sul pulsante verde di ingrandimento per circa mezzo secondo mostra lo stesso pannello Snap Layouts del trascinamento verso il bordo superiore.",
+        snapDividerHintEnable: "Mostra un divisore tra le finestre agganciate",
+        snapDividerHintCaption: "Tenere il puntatore sulla giunzione tra due finestre agganciate mostra una barra sottile che indica che trascinando da lì si ridimensionano entrambe insieme."
     )
 
     static let ja = WindowLayoutFeatureStrings(
@@ -2092,7 +2112,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "Dockプレビューでグループを表示",
         snapGroupsInDockCaption: "スナップしたウィンドウのDockアイコンを右クリックすると、同じグループの他のウィンドウもまとめて表示できます。",
         snapLayoutsOnZoomButtonEnable: "拡大ボタンでレイアウトを表示",
-        snapLayoutsOnZoomButtonCaption: "ウインドウの緑色の拡大ボタンに約0.5秒ポインタを合わせると、上端へのドラッグと同じSnap Layoutsパネルが表示されます。"
+        snapLayoutsOnZoomButtonCaption: "ウインドウの緑色の拡大ボタンに約0.5秒ポインタを合わせると、上端へのドラッグと同じSnap Layoutsパネルが表示されます。",
+        snapDividerHintEnable: "スナップしたウィンドウ間に区切り線ヒントを表示",
+        snapDividerHintCaption: "スナップした2つのウィンドウの境界にポインタを合わせると、そこからドラッグすると両方が同時にリサイズされることを示す細いバーが表示されます。"
     )
 
     static let zhHans = WindowLayoutFeatureStrings(
@@ -2184,7 +2206,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "在 Dock 预览中显示群组",
         snapGroupsInDockCaption: "右键点击已贴靠窗口的 Dock 图标，即可同时显示该群组中的其他窗口。",
         snapLayoutsOnZoomButtonEnable: "在最大化按钮上显示布局",
-        snapLayoutsOnZoomButtonCaption: "将指针悬停在窗口的绿色最大化按钮上约半秒，即可显示与拖到屏幕顶部边缘相同的 Snap Layouts 面板。"
+        snapLayoutsOnZoomButtonCaption: "将指针悬停在窗口的绿色最大化按钮上约半秒，即可显示与拖到屏幕顶部边缘相同的 Snap Layouts 面板。",
+        snapDividerHintEnable: "在已贴靠的窗口之间显示分隔线提示",
+        snapDividerHintCaption: "将指针悬停在两个已贴靠窗口的接缝处，会显示一条细条，提示从那里拖动可同时调整两者的大小。"
     )
 
     static let zhTW = WindowLayoutFeatureStrings(
@@ -2276,7 +2300,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "在 Dock 預覽中顯示群組",
         snapGroupsInDockCaption: "在已貼齊視窗的 Dock 圖示上按右鍵，即可同時顯示該群組中的其他視窗。",
         snapLayoutsOnZoomButtonEnable: "在最大化按鈕上顯示版面配置",
-        snapLayoutsOnZoomButtonCaption: "將指標停留在視窗的綠色最大化按鈕上約半秒，即可顯示與拖曳到螢幕頂端邊緣相同的 Snap Layouts 面板。"
+        snapLayoutsOnZoomButtonCaption: "將指標停留在視窗的綠色最大化按鈕上約半秒，即可顯示與拖曳到螢幕頂端邊緣相同的 Snap Layouts 面板。",
+        snapDividerHintEnable: "在已貼齊的視窗之間顯示分隔線提示",
+        snapDividerHintCaption: "將指標停留在兩個已貼齊視窗的接縫處，會顯示一條細條，提示從那裡拖曳可同時調整兩者的大小。"
     )
 
     static let zhHK = WindowLayoutFeatureStrings(
@@ -2368,7 +2394,9 @@ struct WindowLayoutFeatureStrings {
         snapGroupsInDockEnable: "喺 Dock 預覽入面顯示群組",
         snapGroupsInDockCaption: "喺已貼齊視窗嘅 Dock 圖示上按右鍵，就可以一齊顯示同一個群組嘅其他視窗。",
         snapLayoutsOnZoomButtonEnable: "喺最大化掣度顯示版面配置",
-        snapLayoutsOnZoomButtonCaption: "將指標停留喺視窗嘅綠色最大化掣上面大約半秒，就會顯示同拖到螢幕頂邊一樣嘅 Snap Layouts 面板。"
+        snapLayoutsOnZoomButtonCaption: "將指標停留喺視窗嘅綠色最大化掣上面大約半秒，就會顯示同拖到螢幕頂邊一樣嘅 Snap Layouts 面板。",
+        snapDividerHintEnable: "喺已貼齊嘅視窗之間顯示分隔線提示",
+        snapDividerHintCaption: "將指標停留喺兩個已貼齊視窗嘅接縫度，就會顯示一條幼條，提示喺嗰度拖曳可以同時調整兩者嘅大小。"
     )
 }
 

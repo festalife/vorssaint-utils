@@ -26,6 +26,7 @@ struct WindowLayoutSettings: View {
         : SnapAssistSupport.Mode.off.rawValue
     @AppStorage(DefaultsKey.windowSnapLinkedResizeEnabled) private var snapLinkedResizeEnabled = true
     @AppStorage(DefaultsKey.windowSnapRestoreSizeOnDrag) private var snapRestoreSizeEnabled = true
+    @AppStorage(DefaultsKey.windowSnapDividerHint) private var snapDividerHintEnabled = true
     @AppStorage(DefaultsKey.windowGestureEnabled) private var gestureEnabled = false
     @AppStorage(DefaultsKey.windowGestureModifiers) private var gestureModifiers = WindowGestureSupport.defaultModifierStorageValue
     @AppStorage(DefaultsKey.windowGestureRaiseWindow) private var gestureRaiseWindow = false
@@ -128,6 +129,13 @@ struct WindowLayoutSettings: View {
                     // watches, never a tap of its own.
                     Toggle(text.snapRestoreSizeEnable, isOn: $snapRestoreSizeEnabled)
                     Text(text.snapRestoreSizeCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // No onChange/syncWithPreferences call either: read
+                    // fresh on the same mouseMoved sample the zoom-button
+                    // hover trigger already reads, never a tap of its own.
+                    Toggle(text.snapDividerHintEnable, isOn: $snapDividerHintEnabled)
+                    Text(text.snapDividerHintCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

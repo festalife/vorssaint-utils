@@ -606,6 +606,9 @@ enum DefaultsKey {
     // the same Snap Layouts panel the top-edge drag does, anchored below
     // the button. See `SnapLayoutsSupport.zoomButtonPanelFrame`.
     static let windowSnapLayoutsOnZoomButton = "windowSnapLayoutsOnZoomButton"
+    // Spec §6/§12: a thin hint bar on the shared seam between two Snap
+    // Group members. See `SnapDividerHintSupport`.
+    static let windowSnapDividerHint = "windowSnapDividerHint"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1352,6 +1355,10 @@ enum Defaults {
         // window's own zoom button, so it never surfaces anything on its
         // own the way the other Snap Layouts toggles above do not either.
         DefaultsKey.windowSnapLayoutsOnZoomButton: true,
+        // On by default, matching Windows' own visual divider; it only
+        // ever shows once the pointer actually rests on a real Snap Group
+        // seam, so it never surfaces anything on its own.
+        DefaultsKey.windowSnapDividerHint: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,
