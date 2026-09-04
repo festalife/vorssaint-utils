@@ -67,6 +67,9 @@ final class SnapController {
     // MARK: - State
 
     private var machine = SnapStateMachine()
+    /// Set while `transition` is closing the Snap Assist panel, so the
+    /// panel's own `onDismiss` cannot re-enter the machine.
+    private var isLeavingAssist = false
 
     /// Snap Group membership, live frames and linked resize — everything that
     /// remembers *where windows are*, kept out of this file so what is left
@@ -180,6 +183,12 @@ final class SnapController {
 
     // MARK: - State machine
 
+    /// Applies one event, logs the result, and — the single rule that keeps
+    /// the overlay from ever outliving its own phase — closes the Snap Assist
+    /// panel whenever the machine leaves `.assisting` for any reason at all,
+    /// including a fresh drag superseding it (spec §9's "doppia richiesta").
+    /// Nothing else anywhere hides that panel on a phase change, so the two
+    /// cannot drift apart.
     @discardableResult
     private func transition(_ event: SnapEvent) -> SnapPhase {
         let result = machine.apply(event)
@@ -187,6 +196,15 @@ final class SnapController {
             SnapLog.event("state", "\(result.from.name) -> \(result.to.name) reason=\(result.reason)")
         } else {
             SnapLog.event("state.hold", "\(result.from.name) reason=\(result.reason)")
+        }
+        if case .assisting = result.from, !isLeavingAssist {
+            if case .assisting = result.to {} else {
+                // The panel's own dismissal calls back in here; the flag stops
+                // that from re-entering as a second, meaningless transition.
+                isLeavingAssist = true
+                assistPanel?.hide(reason: result.reason)
+                isLeavingAssist = false
+            }
         }
         return result.to
     }
@@ -554,7 +572,12 @@ final class SnapController {
             SnapLog.event("drag.late-skip", "windowID=\(drag.key.windowID) reason=window-never-moved")
             return
         }
-        guard let target = edgeTarget(atQuartz: releaseLocation).map(freeSpaceAdjustedTarget) else {
+        guard let raw = edgeTarget(atQuartz: releaseLocation) else {
+            SnapLog.event("drag.late-skip", "windowID=\(drag.key.windowID) reason=no-zone-at-release")
+            return
+        }
+        let target: WindowEdgeSnapTarget? = freeSpaceAdjustedTarget(raw, excluding: drag.key.windowID)
+        guard let target else {
             SnapLog.event("drag.late-skip", "windowID=\(drag.key.windowID) reason=no-zone-at-release")
             return
         }
@@ -602,7 +625,8 @@ final class SnapController {
     /// passed through the free-space substitution, so the preview shows
     /// exactly the rectangle the release will write (spec §5).
     private func resolvedTarget(atQuartz location: CGPoint) -> WindowEdgeSnapTarget? {
-        rawTarget(atQuartz: location).map(freeSpaceAdjustedTarget)
+        guard let raw = rawTarget(atQuartz: location) else { return nil }
+        return freeSpaceAdjustedTarget(raw, excluding: drag?.key.windowID)
     }
 
     private func rawTarget(atQuartz location: CGPoint) -> WindowEdgeSnapTarget? {
@@ -667,12 +691,17 @@ final class SnapController {
         return WindowEdgeSnapTarget(action: action, frame: rect.integral, visibleFrame: screen.visibleFrame)
     }
 
-    private func freeSpaceAdjustedTarget(_ target: WindowEdgeSnapTarget) -> WindowEdgeSnapTarget {
+    /// `excluding` is the window this target is *for*: when it is already a
+    /// Snap Group member (re-snapping it), its own old zone must never shrink
+    /// its own new one. Passed explicitly rather than read from `drag`, which
+    /// the late-release path has already cleared by the time it asks.
+    private func freeSpaceAdjustedTarget(_ target: WindowEdgeSnapTarget,
+                                         excluding windowID: CGWindowID?) -> WindowEdgeSnapTarget {
         let adjusted = freeSpace(for: target.action,
                                  theoreticalZone: target.frame,
                                  visibleFrame: target.visibleFrame,
                                  fallbackRect: target.frame,
-                                 excluding: drag?.key.windowID)
+                                 excluding: windowID)
         guard adjusted != target.frame else { return target }
         return WindowEdgeSnapTarget(action: target.action, frame: adjusted.integral, visibleFrame: target.visibleFrame)
     }

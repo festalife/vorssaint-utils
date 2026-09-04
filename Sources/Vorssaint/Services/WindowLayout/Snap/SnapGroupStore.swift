@@ -411,6 +411,7 @@ final class SnapGroupStore {
     }
 
     func suspend() {
+        watcherEnabled = false
         watcher.stopAll()
         selfWrites.removeAll()
         framesCache.removeAll()
