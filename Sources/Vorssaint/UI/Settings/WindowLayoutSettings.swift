@@ -13,7 +13,18 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowDirectionalShortcut) private var directionalShortcutRaw = GlobalShortcut.windowDirectionalDefault.storageValue
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
     @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
-    @AppStorage(DefaultsKey.windowSnapLayoutsOnZoomButton) private var snapLayoutsOnZoomButtonEnabled = true
+    // No registered default (see `Defaults.swift`'s own comment on this
+    // key): `@AppStorage`'s default here is only ever consulted when the
+    // key was never written, so this mirrors
+    // `SnapLayoutPresets.zoomHoverDefaultEnabled` exactly — off by default
+    // on a Mac where macOS's own zoom-button hover menu is already
+    // available, on everywhere else, and never overriding a person's own
+    // explicit choice either way.
+    @AppStorage(DefaultsKey.windowSnapLayoutsOnZoomButton)
+    private var snapLayoutsOnZoomButtonEnabled = SnapLayoutPresets.zoomHoverDefaultEnabled(
+        storedValue: nil,
+        nativeMenuAvailable: WindowEdgeSnapSupport.isSystemZoomButtonHoverMenuAvailable
+    )
     @AppStorage(DefaultsKey.windowSnapEarlyEdge) private var snapEarlyEdgeEnabled = true
     @AppStorage(DefaultsKey.windowSnapFillsFreeSpace) private var snapFillsFreeSpace = true
     // `@AppStorage`'s default is only ever consulted when the key itself was

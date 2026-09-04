@@ -602,9 +602,11 @@ enum DefaultsKey {
     // "Show group" alongside its normal preview. See
     // `WindowLayoutService.snapGroupPeers(of:)`.
     static let windowSnapGroupsInDock = "windowSnapGroupsInDock"
-    // Spec §3/§12: hovering a window's zoom (green) button for ~0.5s shows
+    // Spec §3/§12: hovering a window's zoom (green) button briefly shows
     // the same Snap Layouts panel the top-edge drag does, anchored below
-    // the button. See `SnapLayoutsSupport.zoomButtonPanelFrame`.
+    // the button. See `SnapLayoutsSupport.zoomButtonPanelFrame`. No
+    // registered default — see the comment where its default is picked,
+    // just above `windowSnapDividerHint`'s own registration below.
     static let windowSnapLayoutsOnZoomButton = "windowSnapLayoutsOnZoomButton"
     // Spec §6/§12: a thin hint bar on the shared seam between two Snap
     // Group members. See `SnapDividerHintSupport`.
@@ -1350,11 +1352,17 @@ enum Defaults {
         // setting; it only ever changes anything once a real Snap Group
         // with more than one member already exists.
         DefaultsKey.windowSnapGroupsInDock: true,
-        // On by default, matching the official Windows setting; it only
-        // ever shows the panel once the pointer actually dwells on a
-        // window's own zoom button, so it never surfaces anything on its
-        // own the way the other Snap Layouts toggles above do not either.
-        DefaultsKey.windowSnapLayoutsOnZoomButton: true,
+        // Deliberately NOT registered here: on-device testing (macOS 26)
+        // found the same green button already opens macOS's own hover menu
+        // ("Sposta e ridimensiona / Riempi e disponi / A tutto schermo /
+        // Sposta su iPad") when the system's own window-tiling settings are
+        // on, and showing both at once is a mess. Its default has to depend
+        // on that live system state, so `WindowLayoutSettings` and
+        // `WindowLayoutService.zoomHoverEnabled` compute it themselves via
+        // `SnapLayoutPresets.zoomHoverDefaultEnabled`, reading
+        // `object(forKey:)` (never `.bool(forKey:)`, which cannot tell
+        // "never written" apart from "written false") to know whether a
+        // person has an explicit opinion recorded at all.
         // On by default, matching Windows' own visual divider; it only
         // ever shows once the pointer actually rests on a real Snap Group
         // seam, so it never surfaces anything on its own.

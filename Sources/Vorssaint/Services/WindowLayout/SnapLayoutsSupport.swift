@@ -177,6 +177,20 @@ enum SnapLayoutPresets {
         now - startedAt >= dwell
     }
 
+    /// Spec §3/§12's on-device finding: macOS 15+ shows its own menu on
+    /// the green zoom button, so `windowSnapLayoutsOnZoomButton`'s default
+    /// has to depend on whether that native menu is likely showing —
+    /// `storedValue` is `nil` only the first time this is ever asked (the
+    /// preference key has never been written), in which case the default
+    /// is the opposite of `nativeMenuAvailable`: off where macOS already
+    /// offers the same thing, on everywhere else. Once a person has an
+    /// explicit opinion recorded (`storedValue` non-nil, including one
+    /// they set to `true` on a Mac where the native menu is available),
+    /// that opinion always wins — this never overrides a real choice.
+    static func zoomHoverDefaultEnabled(storedValue: Bool?, nativeMenuAvailable: Bool) -> Bool {
+        storedValue ?? !nativeMenuAvailable
+    }
+
     private static func clamped(_ origin: CGFloat, width: CGFloat,
                                 in lower: CGFloat, _ upper: CGFloat,
                                 fallbackMid: CGFloat) -> CGFloat {

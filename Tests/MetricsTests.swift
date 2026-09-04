@@ -6126,6 +6126,19 @@ struct MetricsTests {
         expect(SnapLayoutPresets.hoverDwellElapsed(startedAt: 100, now: 101, dwell: 0.5),
                "past the dwell interval, the hover counts as elapsed")
 
+        // On-device finding (macOS 26): macOS's own zoom-button hover menu
+        // means windowSnapLayoutsOnZoomButton's default has to depend on
+        // whether that menu is likely available, without ever overriding
+        // an explicit choice.
+        expect(SnapLayoutPresets.zoomHoverDefaultEnabled(storedValue: nil, nativeMenuAvailable: true) == false,
+               "no stored opinion yet, native menu available: defaults off so the two never stack")
+        expect(SnapLayoutPresets.zoomHoverDefaultEnabled(storedValue: nil, nativeMenuAvailable: false) == true,
+               "no stored opinion yet, no native menu (older macOS, or its own tiling settings off): defaults on")
+        expect(SnapLayoutPresets.zoomHoverDefaultEnabled(storedValue: true, nativeMenuAvailable: true) == true,
+               "an explicit true always wins, even where the native menu is available")
+        expect(SnapLayoutPresets.zoomHoverDefaultEnabled(storedValue: false, nativeMenuAvailable: false) == false,
+               "an explicit false always wins, even where there is no native menu to conflict with")
+
         // MARK: Snap Groups
 
         expect(WindowLayoutAction.allCases.allSatisfy { action in

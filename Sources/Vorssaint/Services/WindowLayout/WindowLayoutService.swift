@@ -2941,6 +2941,7 @@ final class WindowLayoutService: ObservableObject {
         snapLayoutsActiveScreen = nil
         zoomHoverPanelActive = false
         zoomHoverStartedAt = nil
+        zoomHoverSuppressedUntilLeave = false
         zoomHoverCache = nil
         dividerHintPanel?.orderOut(nil)
         dividerHintPanel = nil
@@ -3439,8 +3440,17 @@ final class WindowLayoutService: ObservableObject {
     /// panel is the same panel, just a different way to open it), and
     /// Accessibility trusted.
     private var zoomHoverEnabled: Bool {
-        AppFeature.windowLayout.isAvailable
-            && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapLayoutsOnZoomButton)
+        // `object(forKey:)`, never `.bool(forKey:)`: the toggle has no
+        // registered default (see `Defaults.swift`), so this is the only
+        // way to tell "never written" apart from "written false" — exactly
+        // what `zoomHoverDefaultEnabled` needs to know whether to fall
+        // back to the native-menu-aware default at all.
+        let stored = UserDefaults.standard.object(forKey: DefaultsKey.windowSnapLayoutsOnZoomButton) as? Bool
+        let wanted = SnapLayoutPresets.zoomHoverDefaultEnabled(
+            storedValue: stored,
+            nativeMenuAvailable: WindowEdgeSnapSupport.isSystemZoomButtonHoverMenuAvailable)
+        return AppFeature.windowLayout.isAvailable
+            && wanted
             && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapLayoutsEnabled)
             && AXIsProcessTrusted()
     }
@@ -3482,8 +3492,26 @@ final class WindowLayoutService: ObservableObject {
     private var zoomHoverLastSampleAt: TimeInterval = 0
     private static let zoomHoverSampleInterval: TimeInterval = 1.0 / 20.0
     private var zoomHoverStartedAt: TimeInterval?
-    private static let zoomHoverDwellInterval: TimeInterval = 0.5
+    // Spec's on-device finding: our panel has to appear *before* macOS's
+    // own zoom-button hover menu (which showed up after ~1s on macOS 26),
+    // so this is short — 0.5s, the figure spec §3 itself quotes, would
+    // often lose that race.
+    private static let zoomHoverDwellInterval: TimeInterval = 0.3
+    /// A little under where the native menu appeared on-device: once a
+    /// continuous hover reaches this, our panel is force-hidden (never
+    /// left showing alongside the native menu) and no longer re-arms on
+    /// its own — see `zoomHoverSuppressedUntilLeave` — until the pointer
+    /// actually leaves the button and comes back for a fresh hover.
+    private static let zoomHoverAutoHideInterval: TimeInterval = 0.9
     private var zoomHoverPanelActive = false
+    /// Set once a continuous hover passes `zoomHoverAutoHideInterval`, so a
+    /// person who keeps the pointer resting on the button (where the
+    /// native menu is now showing) never sees Vorssaint's own panel pop
+    /// back up moments later when the next dwell interval would otherwise
+    /// have elapsed again. Cleared by `cancelZoomHover()`, which runs
+    /// whenever the pointer actually leaves the button (among other
+    /// resets) — exactly the "leave" this waits for.
+    private var zoomHoverSuppressedUntilLeave = false
     /// The exact preset list the currently-open hover panel was shown with
     /// — `handleZoomHoverClick` hit-tests against this, never a freshly
     /// recomputed list, so a hit can never disagree with what is actually
@@ -3525,11 +3553,27 @@ final class WindowLayoutService: ObservableObject {
             cancelZoomHover()
             return
         }
+        // Still on the same button after the auto-hide cutoff already
+        // fired once this hover: wait for an actual leave (which clears
+        // this via `cancelZoomHover()`) rather than re-arming on the very
+        // next sample, which would just show our panel again right on top
+        // of the still-open native menu.
+        guard !zoomHoverSuppressedUntilLeave else { return }
+
         if zoomHoverStartedAt == nil {
             zoomHoverStartedAt = now
         }
-        guard let startedAt = zoomHoverStartedAt,
-              SnapLayoutPresets.hoverDwellElapsed(startedAt: startedAt, now: now, dwell: Self.zoomHoverDwellInterval)
+        guard let startedAt = zoomHoverStartedAt else { return }
+        guard now - startedAt < Self.zoomHoverAutoHideInterval else {
+            // Spec: never leave both visible. Hide unconditionally (a
+            // no-op if nothing was showing yet) and suppress until the
+            // pointer leaves, since the native menu is likely open by now
+            // regardless of whether our own dwell ever got to show anything.
+            cancelZoomHover()
+            zoomHoverSuppressedUntilLeave = true
+            return
+        }
+        guard SnapLayoutPresets.hoverDwellElapsed(startedAt: startedAt, now: now, dwell: Self.zoomHoverDwellInterval)
         else { return }
         guard !zoomHoverPanelActive else { return }
         presentZoomHoverPanel(button: button)
@@ -3582,6 +3626,7 @@ final class WindowLayoutService: ObservableObject {
     /// applies, including when it was never showing anything to begin with.
     private func cancelZoomHover() {
         zoomHoverStartedAt = nil
+        zoomHoverSuppressedUntilLeave = false
         guard zoomHoverPanelActive else { return }
         zoomHoverPanelActive = false
         snapLayoutsPanel?.hide()

@@ -396,6 +396,22 @@ enum WindowEdgeSnapSupport {
         systemTilingKeys.contains { valueFor($0) ?? true }
     }
 
+    /// Spec §3/§12: on-device (macOS 26) hovering the green zoom button
+    /// shows macOS's own menu ("Sposta e ridimensiona / Riempi e disponi /
+    /// A tutto schermo / Sposta su iPad") after about a second, driven by
+    /// the same `com.apple.WindowManager` tiling toggle group
+    /// `isSystemTilingEnabled` already reads — the two are not independent
+    /// system settings. `WindowLayoutSettings`/`WindowLayoutService` use
+    /// this only to pick `windowSnapLayoutsOnZoomButton`'s own *default*
+    /// (default off when the native menu is likely showing, so the two
+    /// never appear stacked for someone who never touched the toggle);
+    /// it never gates the feature outright, so a person who explicitly
+    /// turns Vorssaint's own panel on — including after turning the native
+    /// menu off — keeps their own choice regardless of this.
+    static var isSystemZoomButtonHoverMenuAvailable: Bool {
+        isSystemTilingEnabled
+    }
+
     static var isSystemTopWindowOverviewDragEnabled: Bool {
         guard #available(macOS 15.0, *) else { return true }
         guard let defaults = UserDefaults(suiteName: "com.apple.dock") else { return true }
