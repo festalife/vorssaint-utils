@@ -602,6 +602,10 @@ enum DefaultsKey {
     // "Show group" alongside its normal preview. See
     // `WindowLayoutService.snapGroupPeers(of:)`.
     static let windowSnapGroupsInDock = "windowSnapGroupsInDock"
+    // Spec §3/§12: hovering a window's zoom (green) button for ~0.5s shows
+    // the same Snap Layouts panel the top-edge drag does, anchored below
+    // the button. See `SnapLayoutsSupport.zoomButtonPanelFrame`.
+    static let windowSnapLayoutsOnZoomButton = "windowSnapLayoutsOnZoomButton"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1343,6 +1347,11 @@ enum Defaults {
         // setting; it only ever changes anything once a real Snap Group
         // with more than one member already exists.
         DefaultsKey.windowSnapGroupsInDock: true,
+        // On by default, matching the official Windows setting; it only
+        // ever shows the panel once the pointer actually dwells on a
+        // window's own zoom button, so it never surfaces anything on its
+        // own the way the other Snap Layouts toggles above do not either.
+        DefaultsKey.windowSnapLayoutsOnZoomButton: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,

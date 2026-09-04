@@ -275,7 +275,9 @@ extension WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "끌어서 떼면 원래 크기로 복원",
         snapRestoreSizeCaption: "붙인 창을 제목 표시줄로 끌어서 떼면 붙이기 전 크기로 돌아가며, 포인터 아래 위치를 유지합니다.",
         snapGroupsInDockEnable: "Dock 미리보기에서 그룹 표시",
-        snapGroupsInDockCaption: "붙인 창의 Dock 아이콘을 마우스 오른쪽 버튼으로 클릭하면 그룹의 다른 모든 창을 함께 표시하는 옵션이 나타납니다."
+        snapGroupsInDockCaption: "붙인 창의 Dock 아이콘을 마우스 오른쪽 버튼으로 클릭하면 그룹의 다른 모든 창을 함께 표시하는 옵션이 나타납니다.",
+        snapLayoutsOnZoomButtonEnable: "확대 버튼 위에서 레이아웃 표시",
+        snapLayoutsOnZoomButtonCaption: "창의 초록색 확대 버튼 위에 약 0.5초간 마우스를 올리면 상단 가장자리로 끄는 것과 같은 Snap Layouts 패널이 나타납니다."
     )
 }
 
@@ -1262,6 +1264,8 @@ struct WindowLayoutFeatureStrings {
     let snapRestoreSizeCaption: String
     let snapGroupsInDockEnable: String
     let snapGroupsInDockCaption: String
+    let snapLayoutsOnZoomButtonEnable: String
+    let snapLayoutsOnZoomButtonCaption: String
 
     static let enUS = WindowLayoutFeatureStrings(
         title: "Window layout",
@@ -1350,7 +1354,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Restore size when dragged away",
         snapRestoreSizeCaption: "Dragging a snapped window away by its title bar returns it to the size it had before it was snapped, staying under the pointer.",
         snapGroupsInDockEnable: "Show groups in Dock preview",
-        snapGroupsInDockCaption: "Right-click a snapped window's Dock icon to offer showing every other window in its group too."
+        snapGroupsInDockCaption: "Right-click a snapped window's Dock icon to offer showing every other window in its group too.",
+        snapLayoutsOnZoomButtonEnable: "Show layouts on the maximize button",
+        snapLayoutsOnZoomButtonCaption: "Hovering a window's green maximize button for about half a second shows the same Snap Layouts panel dragging to the top edge does."
     )
 
     static let ptBR = WindowLayoutFeatureStrings(
@@ -1440,7 +1446,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Restaurar o tamanho ao arrastar para fora",
         snapRestoreSizeCaption: "Arrastar uma janela encaixada pela barra de título a devolve ao tamanho que tinha antes de ser encaixada, mantendo-a sob o ponteiro.",
         snapGroupsInDockEnable: "Mostrar grupos na pré-visualização do Dock",
-        snapGroupsInDockCaption: "Clique com o botão direito no ícone do Dock de uma janela encaixada para também oferecer mostrar as outras janelas do grupo."
+        snapGroupsInDockCaption: "Clique com o botão direito no ícone do Dock de uma janela encaixada para também oferecer mostrar as outras janelas do grupo.",
+        snapLayoutsOnZoomButtonEnable: "Mostrar layouts no botão de maximizar",
+        snapLayoutsOnZoomButtonCaption: "Pairar sobre o botão verde de maximizar por cerca de meio segundo mostra o mesmo painel de Snap Layouts que arrastar até a borda superior."
     )
 
     static let tr = WindowLayoutFeatureStrings(
@@ -1530,7 +1538,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Sürükleyince önceki boyuta dön",
         snapRestoreSizeCaption: "Yaslanmış bir pencereyi başlık çubuğundan sürüklemek, işaretçinin altında kalarak yaslanmadan önceki boyutuna döndürür.",
         snapGroupsInDockEnable: "Dock önizlemesinde grupları göster",
-        snapGroupsInDockCaption: "Yaslanmış bir pencerenin Dock simgesine sağ tıklamak, gruptaki diğer tüm pencereleri de gösterme seçeneği sunar."
+        snapGroupsInDockCaption: "Yaslanmış bir pencerenin Dock simgesine sağ tıklamak, gruptaki diğer tüm pencereleri de gösterme seçeneği sunar.",
+        snapLayoutsOnZoomButtonEnable: "Yerleşimleri büyüt düğmesinde göster",
+        snapLayoutsOnZoomButtonCaption: "Pencerenin yeşil büyüt düğmesinin üzerinde yaklaşık yarım saniye durmak, üst kenara sürüklemekle aynı Snap Layouts panelini gösterir."
     )
 
     static let ru = WindowLayoutFeatureStrings(
@@ -1620,7 +1630,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Восстанавливать размер при перетаскивании",
         snapRestoreSizeCaption: "Перетаскивание прикреплённого окна за заголовок возвращает ему размер, который был до прилипания, оставляя его под указателем.",
         snapGroupsInDockEnable: "Показывать группы в превью Dock",
-        snapGroupsInDockCaption: "Щёлкните правой кнопкой значок прикреплённого окна в Dock, чтобы также показать остальные окна группы."
+        snapGroupsInDockCaption: "Щёлкните правой кнопкой значок прикреплённого окна в Dock, чтобы также показать остальные окна группы.",
+        snapLayoutsOnZoomButtonEnable: "Показывать раскладки на кнопке разворачивания",
+        snapLayoutsOnZoomButtonCaption: "Наведение на зелёную кнопку разворачивания окна примерно на полсекунды показывает ту же панель Snap Layouts, что и перетаскивание к верхнему краю."
     )
 
     static let es = WindowLayoutFeatureStrings(
@@ -1710,7 +1722,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Restaurar el tamaño al arrastrar",
         snapRestoreSizeCaption: "Arrastrar una ventana ajustada por su barra de título le devuelve el tamaño que tenía antes de ajustarse, manteniéndola bajo el puntero.",
         snapGroupsInDockEnable: "Mostrar grupos en la vista previa del Dock",
-        snapGroupsInDockCaption: "Haz clic derecho en el icono del Dock de una ventana ajustada para también mostrar las demás ventanas de su grupo."
+        snapGroupsInDockCaption: "Haz clic derecho en el icono del Dock de una ventana ajustada para también mostrar las demás ventanas de su grupo.",
+        snapLayoutsOnZoomButtonEnable: "Mostrar diseños en el botón de maximizar",
+        snapLayoutsOnZoomButtonCaption: "Mantener el puntero sobre el botón verde de maximizar durante medio segundo muestra el mismo panel de Snap Layouts que arrastrar al borde superior."
     )
 
     static let de = WindowLayoutFeatureStrings(
@@ -1800,7 +1814,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Größe beim Wegziehen wiederherstellen",
         snapRestoreSizeCaption: "Ein angedocktes Fenster an der Titelleiste wegzuziehen stellt seine Größe von vor dem Andocken wieder her und hält es dabei unter dem Zeiger.",
         snapGroupsInDockEnable: "Gruppen in der Dock-Vorschau anzeigen",
-        snapGroupsInDockCaption: "Rechtsklick auf das Dock-Symbol eines angedockten Fensters bietet an, auch alle anderen Fenster seiner Gruppe zu zeigen."
+        snapGroupsInDockCaption: "Rechtsklick auf das Dock-Symbol eines angedockten Fensters bietet an, auch alle anderen Fenster seiner Gruppe zu zeigen.",
+        snapLayoutsOnZoomButtonEnable: "Layouts am Maximieren-Knopf anzeigen",
+        snapLayoutsOnZoomButtonCaption: "Etwa eine halbe Sekunde auf dem grünen Maximieren-Knopf verweilen zeigt dasselbe Snap-Layouts-Panel wie das Ziehen an den oberen Rand."
     )
 
     static let fr = WindowLayoutFeatureStrings(
@@ -1890,7 +1906,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Restaurer la taille en le faisant glisser",
         snapRestoreSizeCaption: "Faire glisser une fenêtre ancrée par sa barre de titre lui redonne la taille qu’elle avait avant l’ancrage, tout en restant sous le pointeur.",
         snapGroupsInDockEnable: "Afficher les groupes dans l’aperçu du Dock",
-        snapGroupsInDockCaption: "Un clic droit sur l’icône du Dock d’une fenêtre ancrée propose aussi d’afficher les autres fenêtres de son groupe."
+        snapGroupsInDockCaption: "Un clic droit sur l’icône du Dock d’une fenêtre ancrée propose aussi d’afficher les autres fenêtres de son groupe.",
+        snapLayoutsOnZoomButtonEnable: "Afficher les dispositions sur le bouton d’agrandissement",
+        snapLayoutsOnZoomButtonCaption: "Survoler le bouton vert d’agrandissement pendant environ une demi-seconde affiche le même panneau Snap Layouts que le glisser vers le bord supérieur."
     )
 
     static let it = WindowLayoutFeatureStrings(
@@ -1980,7 +1998,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "Ripristina le dimensioni se trascinata via",
         snapRestoreSizeCaption: "Trascinare una finestra agganciata dalla barra del titolo le restituisce le dimensioni che aveva prima di essere agganciata, restando sotto il puntatore.",
         snapGroupsInDockEnable: "Mostra i gruppi nell'anteprima del Dock",
-        snapGroupsInDockCaption: "Fai clic destro sull'icona del Dock di una finestra agganciata per mostrare anche le altre finestre del suo gruppo."
+        snapGroupsInDockCaption: "Fai clic destro sull'icona del Dock di una finestra agganciata per mostrare anche le altre finestre del suo gruppo.",
+        snapLayoutsOnZoomButtonEnable: "Mostra i layout sul pulsante di ingrandimento",
+        snapLayoutsOnZoomButtonCaption: "Tenere il puntatore sul pulsante verde di ingrandimento per circa mezzo secondo mostra lo stesso pannello Snap Layouts del trascinamento verso il bordo superiore."
     )
 
     static let ja = WindowLayoutFeatureStrings(
@@ -2070,7 +2090,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "ドラッグで離すと元のサイズに戻す",
         snapRestoreSizeCaption: "スナップしたウィンドウをタイトルバーでドラッグして離すと、スナップ前のサイズに戻り、ポインタの下に留まります。",
         snapGroupsInDockEnable: "Dockプレビューでグループを表示",
-        snapGroupsInDockCaption: "スナップしたウィンドウのDockアイコンを右クリックすると、同じグループの他のウィンドウもまとめて表示できます。"
+        snapGroupsInDockCaption: "スナップしたウィンドウのDockアイコンを右クリックすると、同じグループの他のウィンドウもまとめて表示できます。",
+        snapLayoutsOnZoomButtonEnable: "拡大ボタンでレイアウトを表示",
+        snapLayoutsOnZoomButtonCaption: "ウインドウの緑色の拡大ボタンに約0.5秒ポインタを合わせると、上端へのドラッグと同じSnap Layoutsパネルが表示されます。"
     )
 
     static let zhHans = WindowLayoutFeatureStrings(
@@ -2160,7 +2182,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "拖离时恢复原始大小",
         snapRestoreSizeCaption: "用标题栏把已贴靠的窗口拖离时，会恢复到贴靠前的大小，并保持在指针下方。",
         snapGroupsInDockEnable: "在 Dock 预览中显示群组",
-        snapGroupsInDockCaption: "右键点击已贴靠窗口的 Dock 图标，即可同时显示该群组中的其他窗口。"
+        snapGroupsInDockCaption: "右键点击已贴靠窗口的 Dock 图标，即可同时显示该群组中的其他窗口。",
+        snapLayoutsOnZoomButtonEnable: "在最大化按钮上显示布局",
+        snapLayoutsOnZoomButtonCaption: "将指针悬停在窗口的绿色最大化按钮上约半秒，即可显示与拖到屏幕顶部边缘相同的 Snap Layouts 面板。"
     )
 
     static let zhTW = WindowLayoutFeatureStrings(
@@ -2250,7 +2274,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "拖曳離開時還原大小",
         snapRestoreSizeCaption: "用標題列把已貼齊的視窗拖曳離開時，會還原成貼齊前的大小，並保持在指標下方。",
         snapGroupsInDockEnable: "在 Dock 預覽中顯示群組",
-        snapGroupsInDockCaption: "在已貼齊視窗的 Dock 圖示上按右鍵，即可同時顯示該群組中的其他視窗。"
+        snapGroupsInDockCaption: "在已貼齊視窗的 Dock 圖示上按右鍵，即可同時顯示該群組中的其他視窗。",
+        snapLayoutsOnZoomButtonEnable: "在最大化按鈕上顯示版面配置",
+        snapLayoutsOnZoomButtonCaption: "將指標停留在視窗的綠色最大化按鈕上約半秒，即可顯示與拖曳到螢幕頂端邊緣相同的 Snap Layouts 面板。"
     )
 
     static let zhHK = WindowLayoutFeatureStrings(
@@ -2340,7 +2366,9 @@ struct WindowLayoutFeatureStrings {
         snapRestoreSizeEnable: "拖曳離開時還原大小",
         snapRestoreSizeCaption: "用標題列將已貼齊嘅視窗拖曳離開時，會還原返貼齊之前嘅大小，並保持喺指標下方。",
         snapGroupsInDockEnable: "喺 Dock 預覽入面顯示群組",
-        snapGroupsInDockCaption: "喺已貼齊視窗嘅 Dock 圖示上按右鍵，就可以一齊顯示同一個群組嘅其他視窗。"
+        snapGroupsInDockCaption: "喺已貼齊視窗嘅 Dock 圖示上按右鍵，就可以一齊顯示同一個群組嘅其他視窗。",
+        snapLayoutsOnZoomButtonEnable: "喺最大化掣度顯示版面配置",
+        snapLayoutsOnZoomButtonCaption: "將指標停留喺視窗嘅綠色最大化掣上面大約半秒，就會顯示同拖到螢幕頂邊一樣嘅 Snap Layouts 面板。"
     )
 }
 

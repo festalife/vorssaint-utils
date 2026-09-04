@@ -55,6 +55,32 @@ final class SnapLayoutsPanel {
         }
     }
 
+    /// Spec §3/§12: shows (or repositions) the panel anchored below
+    /// `buttonFrame` — the hover trigger's counterpart to `show`, sharing
+    /// its exact panel-creation and fade-in path so a person can never
+    /// tell, from the panel itself, which of the two ways they opened it.
+    func showBelowButton(buttonFrame: CGRect, visibleFrame: CGRect, presets: [SnapLayoutPreset]) {
+        let panel = ensurePanel()
+        if state.presets != presets {
+            state.presets = presets
+        }
+        let size = SnapLayoutPresets.panelSize(for: presets)
+        let frame = SnapLayoutPresets.zoomButtonPanelFrame(buttonFrame: buttonFrame,
+                                                           panelSize: size,
+                                                           visibleFrame: visibleFrame).integral
+        if panel.frame != frame {
+            panel.setFrame(frame, display: true)
+        }
+        guard !panel.isVisible else { return }
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.1
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+    }
+
     func hide() {
         state.highlighted = nil
         guard let panel, panel.isVisible else { return }

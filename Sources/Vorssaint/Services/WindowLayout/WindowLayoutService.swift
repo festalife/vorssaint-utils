@@ -2894,9 +2894,20 @@ final class WindowLayoutService: ObservableObject {
     /// after a window move has already been confirmed on the main queue.
     private func startEdgeSnapTap() {
         guard edgeSnapTap == nil else { return }
+        // `.mouseMoved` is here only for spec §3/§12's hover-the-zoom-button
+        // trigger (`handleZoomHoverMouseMoved`) — every other branch below
+        // still only ever reacts to a mouse button, unchanged. Reusing this
+        // already-running tap (rather than a second one) means the hover
+        // feature exists only while edge snapping itself is on, which is
+        // also where `snapLayoutsPanel` and everything it needs already
+        // lives; `handleZoomHoverMouseMoved` throttles and cheaply bails
+        // before touching Accessibility on almost every sample, so the
+        // extra event type costs nothing while the pointer is not near a
+        // window's own zoom button.
         let mask = CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
             | CGEventMask(1 << CGEventType.leftMouseDragged.rawValue)
             | CGEventMask(1 << CGEventType.leftMouseUp.rawValue)
+            | CGEventMask(1 << CGEventType.mouseMoved.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -2928,6 +2939,9 @@ final class WindowLayoutService: ObservableObject {
         snapLayoutsPanel?.hide()
         snapLayoutsPanel = nil
         snapLayoutsActiveScreen = nil
+        zoomHoverPanelActive = false
+        zoomHoverStartedAt = nil
+        zoomHoverCache = nil
         if let edgeSnapRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), edgeSnapRunLoopSource, .commonModes)
         }
@@ -2954,6 +2968,31 @@ final class WindowLayoutService: ObservableObject {
         guard event.getIntegerValueField(.eventSourceUserData) != Self.syntheticEventMarker,
               event.getIntegerValueField(.eventSourceUnixProcessID) != Self.ownProcessID
         else { return Unmanaged.passUnretained(event) }
+
+        // Spec §3/§12: hovering the zoom button is entirely outside the
+        // press/drag state machine below (no button is ever held for it),
+        // so it is handled here and returns immediately — never reaching,
+        // and never disturbed by, `edgeSnapSequenceSuppressed` or any of
+        // the drag bookkeeping that follows.
+        if type == .mouseMoved {
+            let location = event.location
+            DispatchQueue.main.async { [weak self] in self?.handleZoomHoverMouseMoved(atQuartzPoint: location) }
+            return Unmanaged.passUnretained(event)
+        }
+        // A press or release is also always relevant to a hover-shown Snap
+        // Layouts panel (a click on one of its cells, or anywhere else that
+        // should dismiss it) regardless of what the drag state machine
+        // below decides to do with the same event — dispatched as a second,
+        // independent side effect so neither path can affect the other's
+        // decisions. The panel `ignoresMouseEvents`, so nothing here ever
+        // needs to consume the event.
+        if type == .leftMouseDown || type == .leftMouseUp {
+            let location = event.location
+            let isDown = type == .leftMouseDown
+            DispatchQueue.main.async { [weak self] in
+                self?.handleZoomHoverClick(atQuartzPoint: location, isDown: isDown)
+            }
+        }
 
         if type == .leftMouseDown {
             edgeSnapSequenceSuppressed = WindowEdgeSnapSupport.isSystemTilingEnabled
@@ -3331,6 +3370,165 @@ final class WindowLayoutService: ObservableObject {
     private func hideSnapLayoutsPanel() {
         snapLayoutsPanel?.hide()
         snapLayoutsActiveScreen = nil
+        // The two triggers share one `snapLayoutsPanel` instance, so hiding
+        // it here (the top-edge-drag path's own cleanup) must also clear
+        // the hover trigger's idea of whether its panel is still showing —
+        // otherwise a hover already open when a drag starts elsewhere would
+        // leave `zoomHoverPanelActive` stuck true after this hides it out
+        // from under it, and the hover trigger would never re-show until
+        // the pointer left and returned to the button.
+        zoomHoverPanelActive = false
+    }
+
+    // MARK: - Snap Layouts on zoom-button hover (spec §3/§12)
+
+    /// Whether spec §3's hover trigger should react at all: the feature
+    /// available, its own toggle, the parent Snap Layouts toggle (this
+    /// panel is the same panel, just a different way to open it), and
+    /// Accessibility trusted.
+    private var zoomHoverEnabled: Bool {
+        AppFeature.windowLayout.isAvailable
+            && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapLayoutsOnZoomButton)
+            && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapLayoutsEnabled)
+            && AXIsProcessTrusted()
+    }
+
+    /// The frontmost regular app's focused window's zoom button, refreshed
+    /// at most every `zoomHoverCacheTTL` — cheap enough to pay on a timer
+    /// but not on every one of the many `mouseMoved` samples a real trackpad
+    /// or mouse can deliver, which `handleZoomHoverMouseMoved` tests the
+    /// pointer against first.
+    private struct ZoomHoverButton {
+        let windowID: CGWindowID
+        /// AppKit space, matching `NSEvent`/`NSScreen` coordinates.
+        let frame: CGRect
+    }
+    private var zoomHoverCache: ZoomHoverButton?
+    private var zoomHoverCacheRefreshedAt: TimeInterval = 0
+    private static let zoomHoverCacheTTL: TimeInterval = 0.5
+    private var zoomHoverLastSampleAt: TimeInterval = 0
+    private static let zoomHoverSampleInterval: TimeInterval = 1.0 / 20.0
+    private var zoomHoverStartedAt: TimeInterval?
+    private static let zoomHoverDwellInterval: TimeInterval = 0.5
+    private var zoomHoverPanelActive = false
+    /// The exact preset list the currently-open hover panel was shown with
+    /// — `handleZoomHoverClick` hit-tests against this, never a freshly
+    /// recomputed list, so a hit can never disagree with what is actually
+    /// on screen even if the pointer crossed onto a different display
+    /// between the panel opening and the release.
+    private var zoomHoverPresets: [SnapLayoutPreset] = []
+
+    /// Every `mouseMoved` sample the edge-snap tap forwards while the
+    /// feature is on: cheaply bails whenever there is nothing to do (an
+    /// active drag already owns the panel, the sample arrived before the
+    /// throttle interval, or the pointer is nowhere near the cached button)
+    /// before ever touching Accessibility.
+    private func handleZoomHoverMouseMoved(atQuartzPoint point: CGPoint) {
+        guard zoomHoverEnabled, edgeSnapDrag == nil, edgeSnapPressOrigin == nil,
+              snapLayoutsActiveScreen == nil
+        else {
+            cancelZoomHover()
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - zoomHoverLastSampleAt >= Self.zoomHoverSampleInterval else { return }
+        zoomHoverLastSampleAt = now
+
+        if zoomHoverCache == nil || now - zoomHoverCacheRefreshedAt >= Self.zoomHoverCacheTTL {
+            zoomHoverCache = resolveFocusedZoomButton()
+            zoomHoverCacheRefreshedAt = now
+        }
+        guard let button = zoomHoverCache else {
+            cancelZoomHover()
+            return
+        }
+        let hoverPoint = appKitPoint(fromQuartz: point)
+        guard button.frame.insetBy(dx: -4, dy: -4).contains(hoverPoint) else {
+            cancelZoomHover()
+            return
+        }
+        if zoomHoverStartedAt == nil {
+            zoomHoverStartedAt = now
+        }
+        guard let startedAt = zoomHoverStartedAt,
+              SnapLayoutPresets.hoverDwellElapsed(startedAt: startedAt, now: now, dwell: Self.zoomHoverDwellInterval)
+        else { return }
+        guard !zoomHoverPanelActive else { return }
+        presentZoomHoverPanel(button: button)
+    }
+
+    /// The frontmost regular app's focused (or main, for an app whose focus
+    /// AX does not track precisely) window's zoom button, in AppKit space —
+    /// `nil` for a full-screen window (no partial-zone snap applies to it)
+    /// or one with no zoom button at all (some dialogs and utility panels).
+    private func resolveFocusedZoomButton() -> ZoomHoverButton? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.activationPolicy == .regular,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        else { return nil }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(axApp, 0.35)
+        guard let window = windowAttribute(axApp, kAXFocusedWindowAttribute as String)
+                ?? windowAttribute(axApp, kAXMainWindowAttribute as String),
+              !boolAttribute(window, "AXFullScreen"),
+              let windowID = AXWindowResolver.windowID(for: window),
+              // `windowAttribute` is a generic AXUIElement-typed attribute
+              // getter despite its name (see its own definition) — reused
+              // here for the zoom button rather than adding a second,
+              // near-identical helper.
+              let button = windowAttribute(window, kAXZoomButtonAttribute as String),
+              let buttonFrame = frame(of: button)
+        else { return nil }
+        return ZoomHoverButton(windowID: windowID, frame: appKitFrame(fromAX: buttonFrame))
+    }
+
+    private func presentZoomHoverPanel(button: ZoomHoverButton) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(button.frame.origin) })
+                ?? bestScreen(for: WindowLayoutFrame(origin: button.frame.origin, size: button.frame.size))
+        else { return }
+        let presets = SnapLayoutPresets.availablePresets(for: screen.visibleFrame)
+        let panel = snapLayoutsPanel ?? {
+            let created = SnapLayoutsPanel()
+            snapLayoutsPanel = created
+            return created
+        }()
+        panel.showBelowButton(buttonFrame: button.frame, visibleFrame: screen.visibleFrame, presets: presets)
+        zoomHoverPanelActive = true
+        zoomHoverPresets = presets
+    }
+
+    /// Resets every piece of hover-tracking state and hides the panel if
+    /// this trigger is the one that opened it — safe to call whenever
+    /// anything (a drag starting, the pointer leaving the button, the
+    /// feature turning off mid-hover) means the hover trigger no longer
+    /// applies, including when it was never showing anything to begin with.
+    private func cancelZoomHover() {
+        zoomHoverStartedAt = nil
+        guard zoomHoverPanelActive else { return }
+        zoomHoverPanelActive = false
+        snapLayoutsPanel?.hide()
+    }
+
+    /// The click side-channel `observeEdgeSnapEvent` dispatches for every
+    /// press and release while this trigger's panel might be showing —
+    /// independent of the drag state machine, since no button is ever held
+    /// down to reach this panel in the first place. A release lands either
+    /// on a cell (apply it to the focused window, the same one the button
+    /// belonged to) or elsewhere (dismiss without acting, matching the
+    /// classic panel's own click-outside behavior) — either way the panel
+    /// closes. A press is otherwise ignored: `updateHover`-less panel has
+    /// no state to react to until the matching release.
+    private func handleZoomHoverClick(atQuartzPoint point: CGPoint, isDown: Bool) {
+        guard !isDown, zoomHoverPanelActive, let panel = snapLayoutsPanel, let panelFrame = panel.frame
+        else { return }
+        let hoverPoint = appKitPoint(fromQuartz: point)
+        defer { cancelZoomHover() }
+        guard let hit = SnapLayoutPresets.hit(at: hoverPoint, presets: zoomHoverPresets, panelFrame: panelFrame),
+              let target = focusedTarget(for: hit.action),
+              let screen = bestScreen(for: target.frame)
+        else { return }
+        pruneWindowState(keeping: target.key)
+        _ = applyPlacement(hit.action, to: target, visibleFrame: screen.visibleFrame)
     }
 
     private func edgeSnapQuartzScreenFrames() -> [CGRect] {

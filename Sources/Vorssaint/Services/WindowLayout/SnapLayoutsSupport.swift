@@ -147,6 +147,44 @@ enum SnapLayoutPresets {
                              action: preset.zones[index])
     }
 
+    /// Spec §3/§12: the panel anchored below the zoom (green) button on
+    /// hover, rather than centered under the screen's top edge the way
+    /// `SnapLayoutsPanel.show` places it for the drag-to-top trigger —
+    /// `SnapLayoutsPanel.showBelowButton` is the only caller. Horizontally
+    /// centered on `buttonFrame`, its top edge `belowGap` under the
+    /// button's bottom edge, then clamped so the whole panel stays within
+    /// `visibleFrame` on every axis — a button near a screen's own edge
+    /// (a maximized window, an ultrawide display) must never push the
+    /// panel partly off screen.
+    static func zoomButtonPanelFrame(buttonFrame: CGRect,
+                                     panelSize: CGSize,
+                                     visibleFrame: CGRect,
+                                     belowGap: CGFloat = 6) -> CGRect {
+        let idealX = buttonFrame.midX - panelSize.width / 2
+        let idealY = buttonFrame.minY - belowGap - panelSize.height
+        let clampedX = clamped(idealX, width: panelSize.width, in: visibleFrame.minX, visibleFrame.maxX,
+                               fallbackMid: visibleFrame.midX)
+        let clampedY = clamped(idealY, width: panelSize.height, in: visibleFrame.minY, visibleFrame.maxY,
+                               fallbackMid: visibleFrame.midY)
+        return CGRect(x: clampedX, y: clampedY, width: panelSize.width, height: panelSize.height)
+    }
+
+    /// Spec §3: "~0.5s" of dwell before the hover trigger fires. A thin
+    /// wrapper around a time subtraction, but kept as a named, tested unit
+    /// so `WindowLayoutService`'s own dwell-tracking state machine has
+    /// exactly one place that can get the comparison direction wrong.
+    static func hoverDwellElapsed(startedAt: TimeInterval, now: TimeInterval, dwell: TimeInterval) -> Bool {
+        now - startedAt >= dwell
+    }
+
+    private static func clamped(_ origin: CGFloat, width: CGFloat,
+                                in lower: CGFloat, _ upper: CGFloat,
+                                fallbackMid: CGFloat) -> CGFloat {
+        let maxOrigin = upper - width
+        guard maxOrigin >= lower else { return fallbackMid - width / 2 }
+        return min(max(origin, lower), maxOrigin)
+    }
+
     /// The narrow band `WindowEdgeSnapSupport.activationDistance` (12pt)
     /// governs the *initial* top-edge trigger with, mirrored here so this
     /// function's `isCurrentlyShown: false` branch is covered by pure tests

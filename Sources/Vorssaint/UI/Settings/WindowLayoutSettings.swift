@@ -13,6 +13,7 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowDirectionalShortcut) private var directionalShortcutRaw = GlobalShortcut.windowDirectionalDefault.storageValue
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
     @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
+    @AppStorage(DefaultsKey.windowSnapLayoutsOnZoomButton) private var snapLayoutsOnZoomButtonEnabled = true
     @AppStorage(DefaultsKey.windowSnapEarlyEdge) private var snapEarlyEdgeEnabled = true
     @AppStorage(DefaultsKey.windowSnapFillsFreeSpace) private var snapFillsFreeSpace = true
     // `@AppStorage`'s default is only ever consulted when the key itself was
@@ -95,6 +96,13 @@ struct WindowLayoutSettings: View {
                             WindowLayoutService.shared.syncWithPreferences()
                         }
                     Text(text.snapLayoutsCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // No onChange/syncWithPreferences call either: read
+                    // fresh on every mouseMoved sample the already-running
+                    // edge-snap tap forwards, never a tap of its own.
+                    Toggle(text.snapLayoutsOnZoomButtonEnable, isOn: $snapLayoutsOnZoomButtonEnabled)
+                    Text(text.snapLayoutsOnZoomButtonCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     // No onChange/syncWithPreferences call: this toggle only

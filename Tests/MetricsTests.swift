@@ -6084,6 +6084,48 @@ struct MetricsTests {
                == slFallback(CGPoint(x: 50, y: slScreen.visibleFrame.maxY)),
                "the fallback and the classic corner/half snap agree at the left corner boundary")
 
+        // Spec §3/§12: the hover-the-zoom-button trigger's own panel anchor
+        // and dwell math.
+        let zbVisible = CGRect(x: 0, y: 40, width: 1440, height: 860)
+        let zbPanelSize = CGSize(width: 300, height: 90)
+        let zbButtonCentered = CGRect(x: 700, y: 850, width: 14, height: 14)
+        let zbCenteredFrame = SnapLayoutPresets.zoomButtonPanelFrame(buttonFrame: zbButtonCentered,
+                                                                     panelSize: zbPanelSize,
+                                                                     visibleFrame: zbVisible)
+        expect(abs(zbCenteredFrame.midX - zbButtonCentered.midX) < 0.01,
+               "the panel is horizontally centered on the button when there is room")
+        expect(zbCenteredFrame.maxY == zbButtonCentered.minY - 6,
+               "the panel sits belowGap under the button's own bottom edge")
+        expect(zbCenteredFrame.size == zbPanelSize, "the anchored frame is always exactly panelSize")
+
+        let zbButtonNearLeftEdge = CGRect(x: 2, y: 850, width: 14, height: 14)
+        let zbLeftClamped = SnapLayoutPresets.zoomButtonPanelFrame(buttonFrame: zbButtonNearLeftEdge,
+                                                                    panelSize: zbPanelSize,
+                                                                    visibleFrame: zbVisible)
+        expect(zbLeftClamped.minX == zbVisible.minX,
+               "a button near the screen's left edge clamps the panel to stay fully on screen rather than " +
+               "letting it hang off the left")
+
+        let zbButtonNearRightEdge = CGRect(x: 1430, y: 850, width: 14, height: 14)
+        let zbRightClamped = SnapLayoutPresets.zoomButtonPanelFrame(buttonFrame: zbButtonNearRightEdge,
+                                                                     panelSize: zbPanelSize,
+                                                                     visibleFrame: zbVisible)
+        expect(zbRightClamped.maxX == zbVisible.maxX, "a button near the right edge clamps the same way on that side")
+
+        let zbButtonNearBottom = CGRect(x: 700, y: 45, width: 14, height: 14)
+        let zbBottomClamped = SnapLayoutPresets.zoomButtonPanelFrame(buttonFrame: zbButtonNearBottom,
+                                                                      panelSize: zbPanelSize,
+                                                                      visibleFrame: zbVisible)
+        expect(zbBottomClamped.minY == zbVisible.minY,
+               "a button too close to the bottom for the panel to fit below it clamps onto the visible frame instead")
+
+        expect(!SnapLayoutPresets.hoverDwellElapsed(startedAt: 100, now: 100.3, dwell: 0.5),
+               "under the dwell interval, the hover has not yet elapsed")
+        expect(SnapLayoutPresets.hoverDwellElapsed(startedAt: 100, now: 100.5, dwell: 0.5),
+               "exactly at the dwell interval, the hover counts as elapsed")
+        expect(SnapLayoutPresets.hoverDwellElapsed(startedAt: 100, now: 101, dwell: 0.5),
+               "past the dwell interval, the hover counts as elapsed")
+
         // MARK: Snap Groups
 
         expect(WindowLayoutAction.allCases.allSatisfy { action in
