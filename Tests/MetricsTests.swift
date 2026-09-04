@@ -7257,6 +7257,46 @@ struct MetricsTests {
         expect(smReset.apply(.reset(reason: "Accessibility revoked")).to == .idle,
                "a reset returns to idle from any phase")
 
+        // MARK: Snap move vs resize, measured from the last live frame
+
+        // The exact sequence captured on a real Mac. A window snapped to the
+        // left half of a 1512-wide screen, then hand-resized narrower, then
+        // dragged away by its title bar at that same narrower width.
+        let smmZone = CGRect(x: 0, y: 0, width: 756, height: 949)
+        let smmResized = CGRect(x: 0, y: 0, width: 602, height: 949)
+        let smmMoved = CGRect(x: 656, y: 0, width: 602, height: 949)
+
+        expect(SnapMemberMotion.classify(lastLiveFrame: smmZone, newFrame: smmResized) == .resize,
+               "narrowing a snapped window from its zone width is a resize")
+        expect(SnapMemberMotion.classify(lastLiveFrame: smmResized, newFrame: smmMoved) == .move,
+               "dragging that already-resized window sideways at the same size is a move")
+        // The bug this replaces: the same drag measured against the ZONE.
+        expect(SnapMemberMotion.classify(lastLiveFrame: smmZone, newFrame: smmMoved) == .resize,
+               "measured against the stale zone the very same drag reads as a resize, "
+                   + "which is why the reference has to be the last live frame")
+
+        expect(SnapMemberMotion.classify(lastLiveFrame: smmResized, newFrame: smmResized) == .unchanged,
+               "a notification carrying no actual change is neither")
+        expect(SnapMemberMotion.classify(lastLiveFrame: smmResized,
+                                         newFrame: smmResized.insetBy(dx: -4, dy: 0)) == .move,
+               "size jitter inside moveSizeTolerance stays a move, as GPU-composited apps report it")
+        expect(SnapMemberMotion.classify(lastLiveFrame: smmResized,
+                                         newFrame: CGRect(x: 0, y: 0, width: 560, height: 949)) == .resize,
+               "a size change past the tolerance is a resize even with the origin unmoved")
+
+        // And the consequence the capture actually cared about: with the right
+        // reference the move leaves the zone, so the drag-away restore fires;
+        // measured against the zone the member still reads as anchored, which
+        // is how the restore went missing.
+        let smmMember = SnapGroupMember(windowID: 15536, action: .leftHalf, frame: smmZone,
+                                        restoreSize: CGSize(width: 900, height: 700))
+        expect(!SnapRestoreOnDragSupport.shouldRestore(member: smmMember, newFrame: smmResized, gap: 0),
+               "resizing along the snapped edge never restores — that is the feature working")
+        expect(SnapRestoreOnDragSupport.shouldRestore(member: smmMember,
+                                                      newFrame: CGRect(x: 383, y: 432, width: 602, height: 949),
+                                                      gap: 0),
+               "the window dragged off its zone at that same width does restore")
+
         // MARK: Snap coordinate conversion
 
         // One helper, used by every conversion in the subsystem, so a sign

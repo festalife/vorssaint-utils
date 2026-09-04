@@ -218,6 +218,44 @@ struct SnapStateMachine: Equatable {
     }
 }
 
+/// Whether a member's geometry change was a move or a resize (spec §6 links a
+/// resize, spec §1 restores a plain drag-away — never both for one change).
+///
+/// **The comparison is against the member's last observed live frame, never
+/// against its zone.** The zone is where the member was *placed*; the moment a
+/// linked resize has happened, the two differ by design. A real capture found
+/// exactly what that costs: a member with zone `leftHalf` 756pt wide, resized
+/// by hand to 602pt, then dragged by its title bar to x=656 at the same 602pt
+/// width, was compared 602-against-756 and classified a *resize* — so the
+/// neighbour was dragged along and squeezed to 140pt while the drag-away
+/// restore never fired at all.
+enum SnapMemberMotion {
+    enum Kind: Equatable {
+        /// Neither origin nor size changed meaningfully.
+        case unchanged
+        /// The window travelled; its size is the same within
+        /// `SnapLinkedResizeSupport.moveSizeTolerance` (which absorbs the size
+        /// jitter GPU-composited apps report during a live drag).
+        case move
+        /// The window's size genuinely changed.
+        case resize
+    }
+
+    /// How far an origin can differ between two live reads and still count as
+    /// the same position — the same float-noise guard the edge comparison in
+    /// `SnapLinkedResizeSupport` uses.
+    private static let originTolerance: CGFloat = 0.5
+
+    static func classify(lastLiveFrame: CGRect, newFrame: CGRect) -> Kind {
+        let sizeDelta = max(abs(newFrame.width - lastLiveFrame.width),
+                            abs(newFrame.height - lastLiveFrame.height))
+        if sizeDelta > SnapLinkedResizeSupport.moveSizeTolerance { return .resize }
+        let originDelta = max(abs(newFrame.minX - lastLiveFrame.minX),
+                              abs(newFrame.minY - lastLiveFrame.minY))
+        return originDelta > originTolerance ? .move : .unchanged
+    }
+}
+
 /// The one place the two coordinate spaces this subsystem straddles are
 /// converted between.
 ///

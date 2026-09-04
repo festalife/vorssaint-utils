@@ -36,6 +36,18 @@ final class SnapGroupStore {
     private let watcher = SnapLinkedResizeWatcher()
     private var watcherEnabled = false
 
+    /// The last frame each member was actually observed at — set by a
+    /// placement, by every notification processed, and by every frame this
+    /// store writes itself.
+    ///
+    /// Deliberately separate from `SnapGroupMember.frame`. The zone must stay
+    /// fixed (it is what decides adjacency), but "did this window move or was
+    /// it resized" can only be answered against where it last actually was.
+    /// Comparing a live frame against the zone instead is a bug that only
+    /// appears *after* a linked resize, when the two have legitimately
+    /// diverged — see `SnapMemberMotion` for the capture that found it.
+    private var lastLiveFrames: [CGWindowID: CGRect] = [:]
+
     /// Frames this store wrote itself, and when. The AX notification a write
     /// provokes must not be mistaken for a fresh user drag — correlated by
     /// *frame*, not by a time window, so a genuine resize starting moments
@@ -100,6 +112,9 @@ final class SnapGroupStore {
                                                minimized: snapshot.minimized,
                                                gap: WindowLayoutGaps.windowGap)
         store(updated, on: screen.displayID)
+        // A placement resets the motion reference: the window is now exactly
+        // where it was put, zone and live frame agreeing again.
+        lastLiveFrames[windowID] = appliedRect
         SnapLog.event("group.join",
                       "windowID=\(windowID) action=\(action) screen=\(screen.displayID) "
                           + "rect=\(SnapLog.rect(appliedRect)) members=\(updated.members.count) "
@@ -118,6 +133,7 @@ final class SnapGroupStore {
             if groups[screenID]?.members.isEmpty == true { groups.removeValue(forKey: screenID) }
         }
         guard touched else { return }
+        lastLiveFrames.removeValue(forKey: windowID)
         SnapLog.event("group.leave", "windowID=\(windowID) reason=\(reason)")
         syncWatcher(enabled: watcherEnabled)
     }
@@ -381,6 +397,9 @@ final class SnapGroupStore {
             return nil
         }
         selfWrites[windowID] = (actual, ProcessInfo.processInfo.systemUptime)
+        // A frame this store wrote is the member's new observed position, so
+        // the next notification is measured from here, not from before it.
+        lastLiveFrames[windowID] = actual
         framesCache.removeAll()
         SnapLog.event("link.write",
                       "windowID=\(windowID) requested=\(SnapLog.rect(rect)) actual=\(SnapLog.rect(actual))")
@@ -404,16 +423,16 @@ final class SnapGroupStore {
     /// Accessibility observer exists while the feature is off.
     func syncWatcher(enabled: Bool) {
         watcherEnabled = enabled
-        let wanted: Set<CGWindowID> = enabled
-            ? Set(groups.values.flatMap { $0.members.map(\.windowID) })
-            : []
-        watcher.watch(wanted)
+        let members = Set(groups.values.flatMap { $0.members.map(\.windowID) })
+        lastLiveFrames = lastLiveFrames.filter { members.contains($0.key) }
+        watcher.watch(enabled ? members : [])
     }
 
     func suspend() {
         watcherEnabled = false
         watcher.stopAll()
         selfWrites.removeAll()
+        lastLiveFrames.removeAll()
         framesCache.removeAll()
     }
 
@@ -449,30 +468,40 @@ final class SnapGroupStore {
             SnapLog.event("link.skip", "windowID=\(windowID) reason=not-a-group-member")
             return
         }
-        let oldFrame = member.frame
-        guard oldFrame != newFrame else { return }
+        // Measured from where this member last actually was — never from its
+        // zone, which a linked resize legitimately leaves behind. Falls back
+        // to the zone only for a member that has not been observed since it
+        // joined, where the two are the same thing anyway.
+        let reference = lastLiveFrames[windowID] ?? member.frame
+        let motion = SnapMemberMotion.classify(lastLiveFrame: reference, newFrame: newFrame)
         framesCache.removeAll()
-
-        let sizeDelta = max(abs(newFrame.width - oldFrame.width), abs(newFrame.height - oldFrame.height))
-        let isResize = sizeDelta > SnapLinkedResizeSupport.moveSizeTolerance
+        lastLiveFrames[windowID] = newFrame
         SnapLog.event("link.notify",
                       "windowID=\(windowID) app=\(SnapLinkedResizeWatcher.label(for: pid)) "
-                          + "zone=\(SnapLog.rect(oldFrame)) live=\(SnapLog.rect(newFrame)) "
-                          + "kind=\(isResize ? "resize" : "move")")
+                          + "zone=\(SnapLog.rect(member.frame)) was=\(SnapLog.rect(reference)) "
+                          + "live=\(SnapLog.rect(newFrame)) kind=\(motion)")
 
-        if isResize {
-            onLayoutReshaped?("a group member was resized by hand")
-        } else if restoreOnDragEnabled,
+        switch motion {
+        case .unchanged:
+            return
+        case .move:
+            // Spec §1's last row. A plain move that carried the member off its
+            // own zone is a title-bar drag-away: restore the pre-snap size
+            // under the cursor and leave the group. A move never adjusts a
+            // neighbour — that is what squeezed one to 140pt when a move was
+            // misread as a resize.
+            guard restoreOnDragEnabled,
                   SnapRestoreOnDragSupport.shouldRestore(member: member, newFrame: newFrame,
-                                                         gap: WindowLayoutGaps.windowGap) {
-            // Spec §1's last row. Reached only for a plain move that carried
-            // the member off its own zone, so a resize along the snapped edge
-            // (which stays anchored by definition) can never land here and the
-            // two features never fight over one notification.
+                                                         gap: WindowLayoutGaps.windowGap)
+            else {
+                SnapLog.event("link.no-adjust", "windowID=\(windowID) reason=plain-move")
+                return
+            }
             restoreOnDragAway(windowID: windowID, member: member, newFrame: newFrame)
             return
+        case .resize:
+            onLayoutReshaped?("a group member was resized by hand")
         }
-        guard isResize else { return }
 
         guard let screen = NSScreen.screens.first(where: { $0.displayID == group.screenID }) else {
             SnapLog.event("link.skip", "windowID=\(windowID) reason=no-screen-for-group")
@@ -484,7 +513,7 @@ final class SnapGroupStore {
 
         let adjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: windowID,
-            oldFrame: oldFrame,
+            oldFrame: reference,
             newFrame: newFrame,
             group: group,
             theoreticalZones: zones,
@@ -496,7 +525,7 @@ final class SnapGroupStore {
             return
         }
         SnapLog.event("link.adjust", "windowID=\(windowID) count=\(adjustments.count)")
-        apply(adjustments, resizedWindowID: windowID, oldFrame: oldFrame, newFrame: newFrame,
+        apply(adjustments, resizedWindowID: windowID, oldFrame: reference, newFrame: newFrame,
               group: group, theoreticalZones: zones)
     }
 

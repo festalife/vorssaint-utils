@@ -140,13 +140,17 @@ enum SnapLinkedResizeSupport {
     /// a resize never does) and the screen's own geometry.
     ///
     /// **The caller must never update a member's `frame` as a result of a
-    /// linked resize — only a fresh placement may**, so that `oldFrame`
-    /// below (always a member's stored `frame`, never a theoretical zone)
-    /// keeps meaning "the last frame this member actually occupied",
-    /// exactly what the plain-move-vs-resize `size` comparison needs it to
-    /// mean — a member placed away from its own theoretical zone by
-    /// free-space snapping must not register a phantom resize the instant
-    /// its next notification arrives. `currentFrames` supplies every
+    /// linked resize — only a fresh placement may.** The zone has to stay
+    /// fixed, since it is what every adjacency decision is made against.
+    /// `oldFrame` is therefore *not* the zone: it is the member's last
+    /// observed live frame (`SnapGroupStore.lastLiveFrames`), which is the
+    /// only thing "did this edge move" and the plain-move-vs-resize `size`
+    /// comparison can honestly be measured from. The two are the same
+    /// rectangle right after a placement and diverge the moment a linked
+    /// resize happens — passing the zone once that has happened misread a
+    /// later title-bar drag as a resize, dragged the neighbour along and
+    /// squeezed it, and swallowed the drag-away restore entirely.
+    /// `currentFrames` supplies every
     /// member's *live* frame, which is what actually gets resized; the
     /// resized window's own live frame is `newFrame`, not whatever
     /// `currentFrames` might also hold for it. A member missing from
