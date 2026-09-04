@@ -2993,8 +2993,21 @@ final class WindowLayoutService: ObservableObject {
         let screens = NSScreen.screens.map {
             WindowEdgeSnapScreen(frame: $0.frame, visibleFrame: $0.visibleFrame)
         }
+        // Spec §12: halves/corners activate up to `earlyEdgeActivationDistance`
+        // from the edge when `windowSnapEarlyEdge` is on; the top strip that
+        // opens Snap Layouts keeps the classic `activationDistance` either way.
         return WindowEdgeSnapSupport.target(at: hoverPoint,
-                                            screens: screens)
+                                            screens: screens,
+                                            distance: WindowEdgeSnapSupport.edgeActivationDistance(
+                                                earlyEdgeEnabled: earlyEdgeEnabled),
+                                            topDistance: WindowEdgeSnapSupport.activationDistance)
+    }
+
+    /// Whether spec §12's "let me snap it without dragging all the way to
+    /// the screen edge" is on — the widened activation band `edgeSnapTarget`
+    /// passes through for halves and corners.
+    private var earlyEdgeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapEarlyEdge)
     }
 
     private func appKitPoint(fromQuartz point: CGPoint) -> CGPoint {

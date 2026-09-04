@@ -5402,6 +5402,29 @@ struct MetricsTests {
         expect(snapTarget(CGPoint(x: 720, y: 450)) == nil,
                "dragging inside a display never creates a snap target")
 
+        // Spec §12: early-edge activation widens halves/corners without
+        // widening the top strip that opens Snap Layouts.
+        expect(WindowEdgeSnapSupport.edgeActivationDistance(earlyEdgeEnabled: false)
+               == WindowEdgeSnapSupport.activationDistance,
+               "off keeps the classic 12pt band")
+        expect(WindowEdgeSnapSupport.edgeActivationDistance(earlyEdgeEnabled: true)
+               == WindowEdgeSnapSupport.earlyEdgeActivationDistance,
+               "on widens to the early-edge band")
+        let earlyDistance = WindowEdgeSnapSupport.edgeActivationDistance(earlyEdgeEnabled: true)
+        expect(snapTarget(CGPoint(x: 25, y: 450)) == nil,
+               "25pt from the left edge is outside the classic band")
+        expect(WindowEdgeSnapSupport.target(at: CGPoint(x: 25, y: 450), screens: [snapScreen],
+                                            distance: earlyDistance)?.action == .leftHalf,
+               "the same point activates the left half once the band is widened")
+        expect(WindowEdgeSnapSupport.target(at: CGPoint(x: 720, y: snapVisibleFrame.maxY - 20),
+                                            screens: [snapScreen], distance: earlyDistance,
+                                            topDistance: WindowEdgeSnapSupport.activationDistance) == nil,
+               "the top strip stays at its classic width even while the edge band widens for halves and corners")
+        expect(WindowEdgeSnapSupport.target(at: CGPoint(x: 720, y: snapVisibleFrame.maxY - 20),
+                                            screens: [snapScreen], distance: earlyDistance,
+                                            topDistance: earlyDistance)?.action == .topHalf,
+               "widening topDistance too (not the default early-edge combination) does widen the top strip")
+
         let leftSnapScreen = WindowEdgeSnapScreen(
             frame: CGRect(x: -1280, y: 0, width: 1280, height: 800),
             visibleFrame: CGRect(x: -1280, y: 25, width: 1280, height: 775)

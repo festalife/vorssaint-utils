@@ -352,6 +352,21 @@ struct WindowEdgeSnapTarget: Equatable {
 
 enum WindowEdgeSnapSupport {
     static let activationDistance: CGFloat = 12
+    /// Spec §12 (verified against the official Windows setting "When I drag
+    /// a window, let me snap it without dragging all the way to the screen
+    /// edge"): how far from a half/corner edge the pointer can be and still
+    /// activate that zone when `windowSnapEarlyEdge` is on. The top strip
+    /// that opens the Snap Layouts panel keeps `activationDistance`
+    /// unchanged — widening it too would make an ordinary drag near the top
+    /// of the screen open the panel far sooner than Windows itself does.
+    static let earlyEdgeActivationDistance: CGFloat = 28
+
+    /// The activation distance a caller should pass to `target(at:)` for
+    /// halves/corners, given the `windowSnapEarlyEdge` preference — pure so
+    /// the preference read stays entirely in `WindowLayoutService`.
+    static func edgeActivationDistance(earlyEdgeEnabled: Bool) -> CGFloat {
+        earlyEdgeEnabled ? earlyEdgeActivationDistance : activationDistance
+    }
     static let resizeCornerDistance: CGFloat = 12
     static let resizeEdgeDistance: CGFloat = 5
     static let desktopAndDockSettingsURL = URL(
@@ -461,16 +476,25 @@ enum WindowEdgeSnapSupport {
     /// choose the reachable edge; visible frames keep the result clear of the
     /// menu bar and Dock. A seam shared by two displays is not an edge, so a
     /// window can cross it without being caught halfway through.
+    /// `topDistance` is a separate band for the top edge (spec §12: the
+    /// early-edge preference "keeps the top strip for the panel" at its
+    /// classic width even while `distance` — the band `nearLeft`/`nearRight`/
+    /// `nearBottom` use — is widened). Defaults to `distance` so every
+    /// existing caller that never mentions it keeps behaving exactly as
+    /// before, both bands equal.
     static func target(at point: CGPoint,
                        screens: [WindowEdgeSnapScreen],
-                       distance: CGFloat = activationDistance) -> WindowEdgeSnapTarget? {
-        for (screen, otherFrames) in reachableScreens(from: point, screens: screens, distance: distance) {
+                       distance: CGFloat = activationDistance,
+                       topDistance: CGFloat? = nil) -> WindowEdgeSnapTarget? {
+        let topDistance = topDistance ?? distance
+        let reachDistance = max(distance, topDistance)
+        for (screen, otherFrames) in reachableScreens(from: point, screens: screens, distance: reachDistance) {
             let frame = screen.frame
             let nearLeft = abs(point.x - frame.minX) <= distance
                 && !hasNeighbor(beyond: .left, point: point, distance: distance, frames: otherFrames)
             let nearRight = abs(point.x - frame.maxX) <= distance
                 && !hasNeighbor(beyond: .right, point: point, distance: distance, frames: otherFrames)
-            let nearTop = isNearTop(point: point, screen: screen, otherFrames: otherFrames, distance: distance)
+            let nearTop = isNearTop(point: point, screen: screen, otherFrames: otherFrames, distance: topDistance)
             let nearBottom = abs(point.y - frame.minY) <= distance
                 && !hasNeighbor(beyond: .bottom, point: point, distance: distance, frames: otherFrames)
             guard nearLeft || nearRight || nearTop || nearBottom else { continue }

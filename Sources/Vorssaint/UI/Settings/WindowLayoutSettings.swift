@@ -13,6 +13,7 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowDirectionalShortcut) private var directionalShortcutRaw = GlobalShortcut.windowDirectionalDefault.storageValue
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
     @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
+    @AppStorage(DefaultsKey.windowSnapEarlyEdge) private var snapEarlyEdgeEnabled = true
     @AppStorage(DefaultsKey.windowSnapFillsFreeSpace) private var snapFillsFreeSpace = true
     // `@AppStorage`'s default is only ever consulted when the key itself was
     // never written, so this mirrors `SnapAssistSupport.Mode.resolved`
@@ -79,6 +80,14 @@ struct WindowLayoutSettings: View {
                     .controlSize(.small)
                 }
                 if edgeSnapEnabled {
+                    // No onChange/syncWithPreferences call: like
+                    // snapFillsFreeSpace below, this only ever changes what
+                    // the next drag sample's own hot-zone math reads, never
+                    // an event tap.
+                    Toggle(text.snapEarlyEdgeEnable, isOn: $snapEarlyEdgeEnabled)
+                    Text(text.snapEarlyEdgeCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Toggle(text.snapLayoutsEnable, isOn: $snapLayoutsEnabled)
                         .onChange(of: snapLayoutsEnabled) { _, _ in
                             WindowLayoutService.shared.syncWithPreferences()

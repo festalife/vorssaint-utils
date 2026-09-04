@@ -269,7 +269,9 @@ extension WindowLayoutFeatureStrings {
         snapAssistModeCaption: "묻기는 채울 창을 직접 고르게 하고, 자동은 가장 최근에 사용한 창으로 바로 채우며, 끄기는 아무 것도 하지 않습니다.",
         snapAssistModeAsk: "묻기(오버레이 표시)",
         snapAssistModeAuto: "자동(즉시 채우기)",
-        snapAssistModeOff: "끄기"
+        snapAssistModeOff: "끄기",
+        snapEarlyEdgeEnable: "가장자리에 닿기 전에 미리 붙이기",
+        snapEarlyEdgeCaption: "포인터가 화면 가장자리에서 조금만 떨어져 있어도 절반/모서리 배치가 시작됩니다."
     )
 }
 
@@ -1250,6 +1252,8 @@ struct WindowLayoutFeatureStrings {
     let snapAssistModeAsk: String
     let snapAssistModeAuto: String
     let snapAssistModeOff: String
+    let snapEarlyEdgeEnable: String
+    let snapEarlyEdgeCaption: String
 
     static let enUS = WindowLayoutFeatureStrings(
         title: "Window layout",
@@ -1332,7 +1336,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "Ask lets you pick another window to fill it; Auto fills it immediately with the most recently used window; Off does nothing.",
         snapAssistModeAsk: "Ask (show overlay)",
         snapAssistModeAuto: "Auto (fill immediately)",
-        snapAssistModeOff: "Off"
+        snapAssistModeOff: "Off",
+        snapEarlyEdgeEnable: "Snap before reaching the edge",
+        snapEarlyEdgeCaption: "Halves and corners activate a little before the pointer actually touches the screen edge."
     )
 
     static let ptBR = WindowLayoutFeatureStrings(
@@ -1416,7 +1422,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "Perguntar permite escolher outra janela para preenchê-lo; Automático preenche imediatamente com a janela usada mais recentemente; Desativado não faz nada.",
         snapAssistModeAsk: "Perguntar (mostrar sobreposição)",
         snapAssistModeAuto: "Automático (preencher imediatamente)",
-        snapAssistModeOff: "Desativado"
+        snapAssistModeOff: "Desativado",
+        snapEarlyEdgeEnable: "Encaixar antes de chegar à borda",
+        snapEarlyEdgeCaption: "Metades e cantos são ativados um pouco antes de o ponteiro tocar a borda da tela."
     )
 
     static let tr = WindowLayoutFeatureStrings(
@@ -1500,7 +1508,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "Sor, doldurmak için başka bir pencere seçmenizi sağlar; Otomatik, en son kullanılan pencereyle hemen doldurur; Kapalı hiçbir şey yapmaz.",
         snapAssistModeAsk: "Sor (yer paylaşımını göster)",
         snapAssistModeAuto: "Otomatik (hemen doldur)",
-        snapAssistModeOff: "Kapalı"
+        snapAssistModeOff: "Kapalı",
+        snapEarlyEdgeEnable: "Kenara ulaşmadan önce yasla",
+        snapEarlyEdgeCaption: "İşaretçi ekranın kenarına tam değmeden yarımlar ve köşeler etkinleşir."
     )
 
     static let ru = WindowLayoutFeatureStrings(
@@ -1584,7 +1594,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "«Спросить» позволяет выбрать другое окно для заполнения; «Автоматически» сразу заполняет его последним использованным окном; «Выключено» ничего не делает.",
         snapAssistModeAsk: "Спросить (показать оверлей)",
         snapAssistModeAuto: "Автоматически (заполнить сразу)",
-        snapAssistModeOff: "Выключено"
+        snapAssistModeOff: "Выключено",
+        snapEarlyEdgeEnable: "Прилипание до достижения края",
+        snapEarlyEdgeCaption: "Половины и углы активируются чуть раньше, чем указатель на самом деле коснётся края экрана."
     )
 
     static let es = WindowLayoutFeatureStrings(
@@ -1668,7 +1680,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "Preguntar te deja elegir otra ventana para llenarlo; Automático lo llena de inmediato con la ventana usada más recientemente; Desactivado no hace nada.",
         snapAssistModeAsk: "Preguntar (mostrar superposición)",
         snapAssistModeAuto: "Automático (llenar de inmediato)",
-        snapAssistModeOff: "Desactivado"
+        snapAssistModeOff: "Desactivado",
+        snapEarlyEdgeEnable: "Ajustar antes de llegar al borde",
+        snapEarlyEdgeCaption: "Las mitades y esquinas se activan un poco antes de que el puntero toque el borde de la pantalla."
     )
 
     static let de = WindowLayoutFeatureStrings(
@@ -1752,7 +1766,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "„Fragen“ lässt dich ein anderes Fenster zum Auffüllen wählen; „Automatisch“ füllt ihn sofort mit dem zuletzt verwendeten Fenster; „Aus“ tut nichts.",
         snapAssistModeAsk: "Fragen (Overlay anzeigen)",
         snapAssistModeAuto: "Automatisch (sofort füllen)",
-        snapAssistModeOff: "Aus"
+        snapAssistModeOff: "Aus",
+        snapEarlyEdgeEnable: "Andocken, bevor der Rand erreicht ist",
+        snapEarlyEdgeCaption: "Hälften und Ecken werden schon kurz bevor der Zeiger den Bildschirmrand berührt aktiviert."
     )
 
     static let fr = WindowLayoutFeatureStrings(
@@ -1836,7 +1852,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "« Demander » vous laisse choisir une autre fenêtre pour le remplir ; « Automatique » le remplit aussitôt avec la fenêtre la plus récemment utilisée ; « Désactivé » ne fait rien.",
         snapAssistModeAsk: "Demander (afficher la superposition)",
         snapAssistModeAuto: "Automatique (remplir aussitôt)",
-        snapAssistModeOff: "Désactivé"
+        snapAssistModeOff: "Désactivé",
+        snapEarlyEdgeEnable: "Ancrer avant d’atteindre le bord",
+        snapEarlyEdgeCaption: "Les moitiés et les coins s’activent juste avant que le pointeur ne touche réellement le bord de l’écran."
     )
 
     static let it = WindowLayoutFeatureStrings(
@@ -1920,7 +1938,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "Chiedi ti lascia scegliere un'altra finestra per riempirlo; Automatico lo riempie subito con la finestra usata più di recente; Disattivato non fa nulla.",
         snapAssistModeAsk: "Chiedi (mostra la sovrapposizione)",
         snapAssistModeAuto: "Automatico (riempi subito)",
-        snapAssistModeOff: "Disattivato"
+        snapAssistModeOff: "Disattivato",
+        snapEarlyEdgeEnable: "Aggancia prima di raggiungere il bordo",
+        snapEarlyEdgeCaption: "Metà e angoli si attivano poco prima che il puntatore tocchi davvero il bordo dello schermo."
     )
 
     static let ja = WindowLayoutFeatureStrings(
@@ -2004,7 +2024,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "「確認」は埋めるウィンドウを自分で選べます。「自動」は直近に使ったウィンドウですぐに埋めます。「オフ」は何もしません。",
         snapAssistModeAsk: "確認する（オーバーレイを表示）",
         snapAssistModeAuto: "自動（すぐに埋める）",
-        snapAssistModeOff: "オフ"
+        snapAssistModeOff: "オフ",
+        snapEarlyEdgeEnable: "端に到達する前にスナップする",
+        snapEarlyEdgeCaption: "ポインタが画面の端に実際に触れる少し前に、半分や角の配置が有効になります。"
     )
 
     static let zhHans = WindowLayoutFeatureStrings(
@@ -2088,7 +2110,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "“询问”可让你自行选择要填充的窗口；“自动”会立即用最近使用的窗口填充；“关闭”则不做任何操作。",
         snapAssistModeAsk: "询问（显示叠加层）",
         snapAssistModeAuto: "自动（立即填充）",
-        snapAssistModeOff: "关闭"
+        snapAssistModeOff: "关闭",
+        snapEarlyEdgeEnable: "靠近边缘时提前贴靠",
+        snapEarlyEdgeCaption: "指针尚未真正碰到屏幕边缘时，半屏和角落布局就会提前启用。"
     )
 
     static let zhTW = WindowLayoutFeatureStrings(
@@ -2172,7 +2196,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "「詢問」可讓你自行選擇要填入的視窗；「自動」會立即用最近使用的視窗填入；「關閉」則不執行任何動作。",
         snapAssistModeAsk: "詢問（顯示疊加層）",
         snapAssistModeAuto: "自動（立即填入）",
-        snapAssistModeOff: "關閉"
+        snapAssistModeOff: "關閉",
+        snapEarlyEdgeEnable: "靠近邊緣時提前貼齊",
+        snapEarlyEdgeCaption: "指標尚未真正碰到螢幕邊緣時，半螢幕與角落配置就會提前啟用。"
     )
 
     static let zhHK = WindowLayoutFeatureStrings(
@@ -2256,7 +2282,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeCaption: "「詢問」可讓你自行選擇要填入嘅視窗；「自動」會即時用最近使用嘅視窗填入；「關閉」就唔會做任何動作。",
         snapAssistModeAsk: "詢問（顯示疊加層）",
         snapAssistModeAuto: "自動（即時填入）",
-        snapAssistModeOff: "關閉"
+        snapAssistModeOff: "關閉",
+        snapEarlyEdgeEnable: "靠近邊緣時提前貼齊",
+        snapEarlyEdgeCaption: "指標仲未真正掂到螢幕邊緣時，半螢幕同角落配置就會提前啟用。"
     )
 }
 

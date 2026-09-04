@@ -583,6 +583,10 @@ enum DefaultsKey {
     static let windowDirectionalEnabled = "windowDirectionalEnabled"
     static let windowDirectionalShortcut = "windowDirectionalShortcut"
     static let windowEdgeSnapEnabled = "windowEdgeSnapEnabled"
+    // Spec §12: "let me snap it without dragging all the way to the screen
+    // edge" — widens half/corner activation from the classic 12pt band to
+    // ~28pt. See `WindowEdgeSnapSupport.edgeActivationDistance`.
+    static let windowSnapEarlyEdge = "windowSnapEarlyEdge"
     static let windowSnapLayoutsEnabled = "windowSnapLayoutsEnabled"
     static let windowSnapFillsFreeSpace = "windowSnapFillsFreeSpace"
     static let windowSnapAssistEnabled = "windowSnapAssistEnabled"
@@ -1304,6 +1308,10 @@ enum Defaults {
         DefaultsKey.windowDirectionalEnabled: false,
         DefaultsKey.windowDirectionalShortcut: GlobalShortcut.windowDirectionalDefault.storageValue,
         DefaultsKey.windowEdgeSnapEnabled: false,
+        // On by default, matching the official Windows 11 setting of the
+        // same name being on out of the box; it only ever changes anything
+        // once classic edge snapping is also on.
+        DefaultsKey.windowSnapEarlyEdge: true,
         // On by default: this only ever shows once classic edge snapping is
         // also on, so it never surfaces new behavior by itself — same
         // reasoning Windows 11 uses shipping it on out of the box.
