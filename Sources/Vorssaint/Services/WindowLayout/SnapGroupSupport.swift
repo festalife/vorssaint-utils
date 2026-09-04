@@ -162,17 +162,31 @@ enum SnapGroupSupport {
         }
     }
 
-    /// The group with every member dropped that Accessibility could no
-    /// longer locate a live frame for (`currentFrames` has no entry — the
-    /// window closed, or is minimized and so was skipped while reading
-    /// frames) or that has drifted off its own zone (`stillAnchored` fails —
-    /// the user moved it). Called before every free-space computation and
-    /// every membership update, so a stale member is never more than one
-    /// placement or one drag sample away from being forgotten.
-    static func pruned(group: SnapGroup, currentFrames: [CGWindowID: CGRect], gap: CGFloat = 0) -> SnapGroup {
+    /// The group with every member dropped that is *confirmed* gone —
+    /// `WindowLayoutService` puts a windowID in `goneOrMinimized` only when
+    /// the window no longer appears in `CGWindowList` at all, or reads back
+    /// minimized — or that has drifted off its own zone (`stillAnchored`
+    /// fails — the user moved it). A member simply missing from
+    /// `currentFrames` without being in `goneOrMinimized` is *kept*: an
+    /// Accessibility read that timed out or came back empty this one round
+    /// is not proof the window is gone — real apps (Chrome, Finder, an
+    /// Electron app) routinely answer slower than an in-process Cocoa
+    /// window does, especially while occupied doing something else, and
+    /// evicting on the first slow read was the bug behind a member
+    /// vanishing moments after joining. A kept-but-frame-missing member
+    /// simply contributes nothing to `freeSpace` this round; it tries again
+    /// next time this group is consulted. Called before every free-space
+    /// computation and every membership update, so a truly stale member is
+    /// never more than one placement or one drag sample away from being
+    /// forgotten.
+    static func pruned(group: SnapGroup,
+                       currentFrames: [CGWindowID: CGRect],
+                       goneOrMinimized: Set<CGWindowID> = [],
+                       gap: CGFloat = 0) -> SnapGroup {
         var result = group
         result.members = group.members.filter { member in
-            guard let current = currentFrames[member.windowID] else { return false }
+            guard !goneOrMinimized.contains(member.windowID) else { return false }
+            guard let current = currentFrames[member.windowID] else { return true }
             return stillAnchored(member: member, currentFrame: current, gap: gap)
         }
         return result
@@ -180,17 +194,19 @@ enum SnapGroupSupport {
 
     /// The group after one more placement: `windowID` is removed from its
     /// old slot (if any) first, every other member is pruned by the same
-    /// rules `pruned(group:currentFrames:gap:)` applies, and `windowID`
-    /// rejoins with its new zone only when `action` is one that joins a
-    /// group at all — maximizing, restoring, going full screen, centering
-    /// or crossing to another display all simply drop the window instead.
+    /// rules `pruned(group:currentFrames:goneOrMinimized:gap:)` applies, and
+    /// `windowID` rejoins with its new zone only when `action` is one that
+    /// joins a group at all — maximizing, restoring, going full screen,
+    /// centering or crossing to another display all simply drop the window
+    /// instead.
     static func updated(group: SnapGroup,
                         windowID: CGWindowID,
                         action: WindowLayoutAction,
                         appliedFrame: CGRect,
                         currentFrames: [CGWindowID: CGRect],
+                        goneOrMinimized: Set<CGWindowID> = [],
                         gap: CGFloat = 0) -> SnapGroup {
-        var result = pruned(group: group, currentFrames: currentFrames, gap: gap)
+        var result = pruned(group: group, currentFrames: currentFrames, goneOrMinimized: goneOrMinimized, gap: gap)
         result.members.removeAll { $0.windowID == windowID }
         if joinsGroup(action) {
             result.members.append(SnapGroupMember(windowID: windowID, action: action, frame: appliedFrame))

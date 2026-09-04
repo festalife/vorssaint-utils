@@ -6208,8 +6208,16 @@ struct MetricsTests {
                                                currentFrames: [1: CGRect(x: 700, y: 0, width: 500, height: 600)])
         expect(sgPruned.members.isEmpty,
                "pruning drops a member whose live frame has drifted off its own zone")
-        expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:]).members.isEmpty,
-               "pruning drops a member Accessibility could not find a live frame for (closed or minimized)")
+        expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:]) == sgGroup,
+               "pruning keeps a member Accessibility simply did not answer for this round — a real app " +
+               "(Chrome, Finder, Electron) can be slower to answer than an in-process Cocoa window, and a " +
+               "missed read alone is never proof the window is gone")
+        expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:], goneOrMinimized: [1]).members.isEmpty,
+               "pruning drops a member the caller has confirmed is gone or minimized")
+        expect(SnapGroupSupport.pruned(group: sgGroup,
+                                       currentFrames: [1: sgLeftZone],
+                                       goneOrMinimized: [1]).members.isEmpty,
+               "goneOrMinimized evicts even when a (stale) live frame is also present for the same round")
         // Pruning has to be a "pay once" operation: WindowLayoutService
         // persists the pruned group back to its store the moment anything
         // is dropped, specifically so a member that cannot be resolved is

@@ -518,7 +518,7 @@ final class WindowLayoutService: ObservableObject {
         }
         guard !group.members.isEmpty else { return theoreticalZone }
 
-        let liveFrames = currentFrames(for: group, on: screen)
+        let liveFrames = currentFrames(for: group, on: screen).frames
         let result = SnapGroupSupport.freeSpace(for: action,
                                                 theoreticalZone: theoreticalZone,
                                                 group: group,
@@ -576,8 +576,10 @@ final class WindowLayoutService: ObservableObject {
     /// so a member that closed or drifted off its zone is forgotten once,
     /// not re-resolved (and re-failed) on the next sample or placement.
     private func prunedGroup(_ group: SnapGroup, on screen: NSScreen) -> SnapGroup {
+        let snapshot = currentFrames(for: group, on: screen)
         let pruned = SnapGroupSupport.pruned(group: group,
-                                             currentFrames: currentFrames(for: group, on: screen),
+                                             currentFrames: snapshot.frames,
+                                             goneOrMinimized: snapshot.goneOrMinimized,
                                              gap: WindowLayoutGaps.windowGap)
         guard pruned.members.count != group.members.count else { return group }
         if pruned.members.isEmpty {
@@ -619,11 +621,13 @@ final class WindowLayoutService: ObservableObject {
                                  fallbackFrame: WindowLayoutFrame) {
         guard let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame) else { return }
         let group = snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID)
+        let snapshot = currentFrames(for: group, on: screen)
         let updated = SnapGroupSupport.updated(group: group,
                                                windowID: windowID,
                                                action: action,
                                                appliedFrame: appliedRect,
-                                               currentFrames: currentFrames(for: group, on: screen),
+                                               currentFrames: snapshot.frames,
+                                               goneOrMinimized: snapshot.goneOrMinimized,
                                                gap: WindowLayoutGaps.windowGap)
         if updated.members.isEmpty {
             snapGroups.removeValue(forKey: screen.displayID)
@@ -662,26 +666,47 @@ final class WindowLayoutService: ObservableObject {
     /// mouse-moved event — and `groupMemberMessagingTimeout` below caps only
     /// the *per-member* worst case, not how often that worst case can be
     /// paid.
-    private var groupFramesCache: [CGDirectDisplayID: (frames: [CGWindowID: CGRect], at: TimeInterval)] = [:]
+    private var groupFramesCache: [CGDirectDisplayID: (snapshot: GroupFrameSnapshot, at: TimeInterval)] = [:]
 
-    private func currentFrames(for group: SnapGroup, on screen: NSScreen) -> [CGWindowID: CGRect] {
+    private func currentFrames(for group: SnapGroup, on screen: NSScreen) -> GroupFrameSnapshot {
         let now = ProcessInfo.processInfo.systemUptime
         if let cached = groupFramesCache[screen.displayID], now - cached.at < Self.groupFramesCacheTTL {
-            return cached.frames
+            return cached.snapshot
         }
-        let frames = rawCurrentFrames(for: group)
-        groupFramesCache[screen.displayID] = (frames, now)
-        return frames
+        let snapshot = rawCurrentFrames(for: group)
+        groupFramesCache[screen.displayID] = (snapshot, now)
+        return snapshot
     }
 
-    /// Accessibility messaging timeout used only for a Snap Group member's
+    /// Accessibility messaging timeout for a Snap Group member's
     /// *background* frame read — a window the user is not currently
-    /// interacting with, unlike `focusedTarget(for:)`'s 0.35s, which
-    /// deliberately waits longer because that read is for the one window the
-    /// user is actively working in. A background member that is hung or
-    /// gone should give up fast, not cost a third of a second per member on
-    /// the very sample that is trying to show a live preview.
-    private static let groupMemberMessagingTimeout: Float = 0.05
+    /// interacting with, matching `focusedTarget(for:)`'s own 0.35s. An
+    /// earlier, much shorter value here (issue found in on-device testing:
+    /// TextEdit, an in-process Cocoa window, always answered fast enough to
+    /// pass, while Chrome, Finder and Electron apps routinely did not,
+    /// making free-space adaptation silently only work for the one kind of
+    /// app it was tested against) traded a real timing risk for a
+    /// correctness bug against exactly the apps most people actually use.
+    /// The per-screen cache above, plus `SnapGroupSupport.pruned` no longer
+    /// evicting on a merely-missing read (see `GroupFrameSnapshot`), are
+    /// what keep this safe: the cost is paid at most once per
+    /// `groupFramesCacheTTL`, and a slow read no longer costs the member
+    /// its membership even when it is paid.
+    private static let groupMemberMessagingTimeout: Float = 0.35
+
+    /// The result of one Accessibility sweep over a Snap Group's members:
+    /// `frames` for whichever ones answered with a usable frame, and
+    /// `goneOrMinimized` for the ones `SnapGroupSupport.pruned` should
+    /// actually evict for — confirmed absent from `CGWindowList` (closed)
+    /// or confirmed minimized. Everything else (present in `CGWindowList`,
+    /// not minimized, but Accessibility did not answer in time or answered
+    /// with nothing usable) is in neither set: not proof of anything except
+    /// that this one read did not land, so the member is kept and simply
+    /// contributes no edge to `freeSpace` this round.
+    private struct GroupFrameSnapshot {
+        var frames: [CGWindowID: CGRect] = [:]
+        var goneOrMinimized: Set<CGWindowID> = []
+    }
 
     /// Live frames for a Snap Group's members, read via Accessibility right
     /// now. Never `member.frame`, which is the zone a member was placed into
@@ -689,15 +714,16 @@ final class WindowLayoutService: ObservableObject {
     /// (`SnapGroupSupport`); never cached at this layer (`currentFrames(for:
     /// on:)` above is the caching wrapper every caller actually uses), since
     /// noticing a hand-resized neighbour is the entire point of this
-    /// feature. A window whose owning process cannot be found, or that
-    /// reads back minimized, is simply left out of the result —
-    /// `SnapGroupSupport.pruned` is what then drops it from the group, which
-    /// is how a closed or minimized member leaves.
-    private func rawCurrentFrames(for group: SnapGroup) -> [CGWindowID: CGRect] {
+    /// feature. One retry immediately follows a failed per-window
+    /// Accessibility read before giving up on it for this sweep — cheap
+    /// (the app's own AX tree is already warm from the first attempt) and
+    /// enough to smooth over an Electron window that briefly lags a frame
+    /// behind its own reported geometry.
+    private func rawCurrentFrames(for group: SnapGroup) -> GroupFrameSnapshot {
         guard !group.members.isEmpty,
               let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements],
                                                        kCGNullWindowID) as? [[String: Any]]
-        else { return [:] }
+        else { return GroupFrameSnapshot() }
         var ownerPIDs: [CGWindowID: pid_t] = [:]
         for window in windows {
             guard let windowID = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
@@ -706,22 +732,41 @@ final class WindowLayoutService: ObservableObject {
             ownerPIDs[windowID] = pid
         }
         var apps: [pid_t: AXUIElement] = [:]
-        var frames: [CGWindowID: CGRect] = [:]
+        var snapshot = GroupFrameSnapshot()
         for member in group.members {
-            guard let pid = ownerPIDs[member.windowID] else { continue }
+            guard let pid = ownerPIDs[member.windowID] else {
+                // Not in CGWindowList at all under any owner: confirmed closed.
+                snapshot.goneOrMinimized.insert(member.windowID)
+                continue
+            }
             let axApp = apps[pid] ?? {
                 let created = AXUIElementCreateApplication(pid)
                 AXUIElementSetMessagingTimeout(created, Self.groupMemberMessagingTimeout)
                 apps[pid] = created
                 return created
             }()
-            guard let axWindow = axElement(windowID: member.windowID, in: axApp),
-                  !boolAttribute(axWindow, kAXMinimizedAttribute as String),
-                  let frame = frame(of: axWindow)
+            // Present in CGWindowList under this pid, so a lookup failure
+            // here is Accessibility not answering, not the window being
+            // gone — retried once before giving up on it for this sweep.
+            guard let axWindow = retrying({ axElement(windowID: member.windowID, in: axApp) })
             else { continue }
-            frames[member.windowID] = appKitFrame(fromAX: frame)
+            if boolAttribute(axWindow, kAXMinimizedAttribute as String) {
+                snapshot.goneOrMinimized.insert(member.windowID)
+                continue
+            }
+            guard let frame = retrying({ frame(of: axWindow) }) else { continue }
+            snapshot.frames[member.windowID] = appKitFrame(fromAX: frame)
         }
-        return frames
+        return snapshot
+    }
+
+    /// Runs `read` once, and again if it came back nil — the whole retry
+    /// budget `rawCurrentFrames` gives a single Accessibility read, cheap
+    /// because the app's own AX tree is already warm from the first
+    /// attempt, and enough to smooth over an Electron window that briefly
+    /// lags a frame behind its own reported geometry.
+    private func retrying<T>(_ read: () -> T?) -> T? {
+        read() ?? read()
     }
 
     private func axElement(windowID: CGWindowID, in axApp: AXUIElement) -> AXUIElement? {
