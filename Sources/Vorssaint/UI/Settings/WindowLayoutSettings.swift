@@ -21,9 +21,10 @@ struct WindowLayoutSettings: View {
     // exactly: nobody who already turned Snap Assist off is shown "Ask" the
     // first time they open this page after updating.
     @AppStorage(DefaultsKey.windowSnapAssistMode)
-    private var snapAssistModeRaw = UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapAssistEnabled)
-        ? SnapAssistSupport.Mode.ask.rawValue
-        : SnapAssistSupport.Mode.off.rawValue
+    private var snapAssistModeRaw = SnapAssistSupport.Mode.resolved(
+        storedRawValue: nil,
+        legacyEnabled: UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapAssistEnabled)
+    ).rawValue
     @AppStorage(DefaultsKey.windowSnapLinkedResizeEnabled) private var snapLinkedResizeEnabled = true
     @AppStorage(DefaultsKey.windowSnapRestoreSizeOnDrag) private var snapRestoreSizeEnabled = true
     @AppStorage(DefaultsKey.windowSnapDividerHint) private var snapDividerHintEnabled = true

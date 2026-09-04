@@ -26,7 +26,12 @@ enum SnapAssistSupport {
         /// written — the migration path for anyone who already has an
         /// opinion recorded under the old key. A person who turned Snap
         /// Assist off keeps seeing it off; everyone else (including nobody
-        /// having touched either key) keeps seeing today's overlay.
+        /// having touched either key) keeps seeing today's overlay. That
+        /// "nobody touched anything" case relies on `windowSnapAssistEnabled`
+        /// itself defaulting to `true` in the registered defaults
+        /// (`Defaults.swift`) — `legacyEnabled` is never a bare
+        /// `UserDefaults.standard.bool(forKey:)` read against an
+        /// unregistered key, which would silently read `false`.
         static func resolved(storedRawValue: String?, legacyEnabled: Bool) -> Mode {
             if let storedRawValue, let mode = Mode(rawValue: storedRawValue) {
                 return mode

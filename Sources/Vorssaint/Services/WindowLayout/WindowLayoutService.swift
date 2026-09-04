@@ -1296,47 +1296,30 @@ final class WindowLayoutService: ObservableObject {
                               screen: NSScreen,
                               visibleFrame: NSRect,
                               fallbackFrame: WindowLayoutFrame) {
-        var excluded: Set<CGWindowID> = [windowID]
-        let group = prunedGroup(snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID), on: screen)
-        excluded.formUnion(group.members.map(\.windowID))
-
-        let items = snapAssistCandidates(on: screen, excluding: excluded)
-        guard let candidate = items.first, let candidateWindowID = candidate.windowID else { return }
-
-        let theoreticalZone = WindowLayoutGeometry.rect(for: cell,
-                                                        current: visibleFrame,
-                                                        visibleFrame: visibleFrame,
-                                                        windowGap: WindowLayoutGaps.windowGap,
-                                                        screenGap: WindowLayoutGaps.screenGap)
-        let freeRect = freeSpaceAdjusted(for: cell,
-                                         theoreticalZone: theoreticalZone,
-                                         visibleFrame: visibleFrame,
-                                         fallbackFrame: fallbackFrame,
-                                         excluding: nil)
-        guard SnapAssistSupport.isOfferable(freeRect: freeRect) else { return }
+        guard let offering = snapAssistOffering(for: cell, windowID: windowID, screen: screen,
+                                                visibleFrame: visibleFrame, fallbackFrame: fallbackFrame),
+              let candidate = offering.items.first, let candidateWindowID = candidate.windowID
+        else { return }
         applySnapAssistPlacement(cell, windowID: candidateWindowID, pid: candidate.windowOwnerPID, screen: screen)
     }
 
-    /// Builds the candidate list and free-space rect for `cell` and either
-    /// presents it or, finding nothing worth showing, hides — the tail end
-    /// shared by both `handleSnapAssist` branches (starting a session and
-    /// advancing one).
-    private func presentCell(_ cell: WindowLayoutAction,
-                             action: WindowLayoutAction,
-                             windowID: CGWindowID,
-                             screen: NSScreen,
-                             visibleFrame: NSRect,
-                             fallbackFrame: WindowLayoutFrame) {
+    /// The candidate list and free-space rect for `cell` — shared by
+    /// `presentCell` (the overlay, spec §4's "ask") and `autoFillCell`
+    /// (spec §4's "auto"), which differ only in what they do with the
+    /// result, never in how it is computed. `nil` means there is nothing
+    /// worth offering: no candidate window at all, or the free space left
+    /// is not worth filling (spec §9's oversized-minimum-window bailout).
+    private func snapAssistOffering(for cell: WindowLayoutAction,
+                                    windowID: CGWindowID,
+                                    screen: NSScreen,
+                                    visibleFrame: NSRect,
+                                    fallbackFrame: WindowLayoutFrame) -> (freeRect: CGRect, items: [SwitcherItem])? {
         var excluded: Set<CGWindowID> = [windowID]
         let group = prunedGroup(snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID), on: screen)
         excluded.formUnion(group.members.map(\.windowID))
 
         let items = snapAssistCandidates(on: screen, excluding: excluded)
-        guard !items.isEmpty else {
-            snapAssistSession = nil
-            hideSnapAssist()
-            return
-        }
+        guard !items.isEmpty else { return nil }
 
         let theoreticalZone = WindowLayoutGeometry.rect(for: cell,
                                                         current: visibleFrame,
@@ -1353,21 +1336,38 @@ final class WindowLayoutService: ObservableObject {
         // oversized minimum window.
         guard SnapAssistSupport.isOfferable(freeRect: freeRect) else {
             if Self.snapAssistDebugLogging {
-                let detail = "presentCell: freeRect not offerable, hiding. cell=\(cell) " +
+                let detail = "snapAssistOffering: freeRect not offerable. cell=\(cell) " +
                     "theoreticalZone=\(theoreticalZone) " +
                     "freeRect=\(freeRect)"
                 Self.snapAssistLog.debug("\(detail, privacy: .public)")
             }
+            return nil
+        }
+        if Self.snapAssistDebugLogging {
+            let detail = "snapAssistOffering: cell=\(cell) freeRect=\(freeRect) itemCount=\(items.count)"
+            Self.snapAssistLog.debug("\(detail, privacy: .public)")
+        }
+        return (freeRect, items)
+    }
+
+    /// Builds the candidate list and free-space rect for `cell` and either
+    /// presents it or, finding nothing worth showing, hides — the tail end
+    /// shared by both `handleSnapAssist` branches (starting a session and
+    /// advancing one).
+    private func presentCell(_ cell: WindowLayoutAction,
+                             action: WindowLayoutAction,
+                             windowID: CGWindowID,
+                             screen: NSScreen,
+                             visibleFrame: NSRect,
+                             fallbackFrame: WindowLayoutFrame) {
+        guard let offering = snapAssistOffering(for: cell, windowID: windowID, screen: screen,
+                                                visibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
+        else {
             snapAssistSession = nil
             hideSnapAssist()
             return
         }
-        if Self.snapAssistDebugLogging {
-            let detail = "presentCell: presenting cell=\(cell) " +
-                "freeRect=\(freeRect) itemCount=\(items.count)"
-            Self.snapAssistLog.debug("\(detail, privacy: .public)")
-        }
-        presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen)
+        presentSnapAssist(cell: cell, freeRect: offering.freeRect, items: offering.items, screen: screen)
     }
 
     /// One window a Snap Assist candidate list or occupancy test can reason
@@ -3225,6 +3225,15 @@ final class WindowLayoutService: ObservableObject {
         let target = resolvedEdgeSnapTarget(atQuartzPoint: location)
         if target != drag.target {
             drag.target = target
+            // Bumped on every target change, including to nil — a fresh
+            // dwell always has to start over. Without this, A→B→A within
+            // the delay window would let the *first* scheduled A show fire
+            // late and display instantly, since by the time it ran the live
+            // target (now A again, having passed through B) matched its
+            // captured value even though the pointer had only been back on
+            // A for a moment — target equality alone cannot tell a
+            // continuous dwell apart from a coincidental revisit.
+            edgeSnapPreviewScheduleGeneration += 1
             if let target {
                 // Spec §1: the preview appears only after ~150ms of dwell
                 // at the edge, not instantly on the very sample that first
@@ -3232,9 +3241,9 @@ final class WindowLayoutService: ObservableObject {
                 // (the `else` branch, unchanged) the moment the pointer
                 // leaves the zone, matching "sparisce subito uscendo dalla
                 // zona." `scheduleEdgeSnapPreview` re-checks the live target
-                // when its delay elapses, so a pointer that keeps moving
-                // through several zones inside 150ms never flashes any of
-                // the ones it only passed through.
+                // and generation when its delay elapses, so a pointer that
+                // keeps moving through several zones inside 150ms never
+                // flashes any of the ones it only passed through.
                 scheduleEdgeSnapPreview(target)
             } else {
                 hideEdgeSnapPreview(immediately: false)
@@ -3248,13 +3257,23 @@ final class WindowLayoutService: ObservableObject {
     /// bordo").
     private static let edgeSnapPreviewDelay: TimeInterval = 0.15
 
+    /// Invalidates a pending `scheduleEdgeSnapPreview` closure whenever the
+    /// target changes again before it fires — see the comment where it is
+    /// bumped, in `updateEdgeSnapDrag`.
+    private var edgeSnapPreviewScheduleGeneration: UInt64 = 0
+
     private func scheduleEdgeSnapPreview(_ target: WindowEdgeSnapTarget) {
+        let generation = edgeSnapPreviewScheduleGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.edgeSnapPreviewDelay) { [weak self] in
-            // Nothing to cancel explicitly: if the drag ended or the target
-            // moved on in the meantime, `edgeSnapDrag?.target` no longer
-            // equals the one this closure captured, and the stale request
-            // is simply dropped here.
-            guard let self, self.edgeSnapDrag?.target == target else { return }
+            // The generation check alone would be enough (it already
+            // invalidates on every target change, nil included), but the
+            // target equality is kept too as a second, independent guard —
+            // cheap, and it costs nothing to never rely on a single check
+            // for whether real user-visible geometry gets drawn.
+            guard let self,
+                  generation == self.edgeSnapPreviewScheduleGeneration,
+                  self.edgeSnapDrag?.target == target
+            else { return }
             self.showEdgeSnapPreview(frame: target.frame)
         }
     }
@@ -3426,6 +3445,27 @@ final class WindowLayoutService: ObservableObject {
             && AXIsProcessTrusted()
     }
 
+    /// How long a cached "is this hover trigger even on" answer stays
+    /// usable — shared by the zoom-button and divider-hint triggers, whose
+    /// underlying reads (`UserDefaults`, `AXIsProcessTrusted()`) are cheap
+    /// individually but not free at the sample rate a real trackpad or
+    /// mouse can deliver `mouseMoved` events, and are asked on nearly every
+    /// one of them by both triggers.
+    private static let hoverEnabledCacheTTL: TimeInterval = 1.0
+    private var zoomHoverEnabledCache = false
+    private var zoomHoverEnabledCacheRefreshedAt: TimeInterval = 0
+
+    /// `zoomHoverEnabled`, refreshed at most once per `hoverEnabledCacheTTL`
+    /// — the only thing `handleZoomHoverMouseMoved` still does after its own
+    /// sample throttle passes besides a couple of scalar comparisons.
+    private func zoomHoverEnabledCached(now: TimeInterval) -> Bool {
+        if now - zoomHoverEnabledCacheRefreshedAt >= Self.hoverEnabledCacheTTL {
+            zoomHoverEnabledCache = zoomHoverEnabled
+            zoomHoverEnabledCacheRefreshedAt = now
+        }
+        return zoomHoverEnabledCache
+    }
+
     /// The frontmost regular app's focused window's zoom button, refreshed
     /// at most every `zoomHoverCacheTTL` — cheap enough to pay on a timer
     /// but not on every one of the many `mouseMoved` samples a real trackpad
@@ -3457,15 +3497,20 @@ final class WindowLayoutService: ObservableObject {
     /// throttle interval, or the pointer is nowhere near the cached button)
     /// before ever touching Accessibility.
     private func handleZoomHoverMouseMoved(atQuartzPoint point: CGPoint) {
-        guard zoomHoverEnabled, edgeSnapDrag == nil, edgeSnapPressOrigin == nil,
+        // The throttle runs before anything else touches UserDefaults or
+        // Accessibility — a `mouseMoved` event tap can fire far faster than
+        // `zoomHoverSampleInterval`, and every sample this drops costs
+        // nothing but a timestamp compare.
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - zoomHoverLastSampleAt >= Self.zoomHoverSampleInterval else { return }
+        zoomHoverLastSampleAt = now
+
+        guard zoomHoverEnabledCached(now: now), edgeSnapDrag == nil, edgeSnapPressOrigin == nil,
               snapLayoutsActiveScreen == nil
         else {
             cancelZoomHover()
             return
         }
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - zoomHoverLastSampleAt >= Self.zoomHoverSampleInterval else { return }
-        zoomHoverLastSampleAt = now
 
         if zoomHoverCache == nil || now - zoomHoverCacheRefreshedAt >= Self.zoomHoverCacheTTL {
             zoomHoverCache = resolveFocusedZoomButton()
@@ -3584,6 +3629,19 @@ final class WindowLayoutService: ObservableObject {
             && AXIsProcessTrusted()
     }
 
+    /// `dividerHintEnabled`, cached the same way and for the same reason
+    /// `zoomHoverEnabledCached` is — see that one's own doc comment.
+    private var dividerHintEnabledCache = false
+    private var dividerHintEnabledCacheRefreshedAt: TimeInterval = 0
+
+    private func dividerHintEnabledCached(now: TimeInterval) -> Bool {
+        if now - dividerHintEnabledCacheRefreshedAt >= Self.hoverEnabledCacheTTL {
+            dividerHintEnabledCache = dividerHintEnabled
+            dividerHintEnabledCacheRefreshedAt = now
+        }
+        return dividerHintEnabledCache
+    }
+
     /// The other half of the mouseMoved sample `handleZoomHoverMouseMoved`
     /// already receives: independent of it (a person can be near a zoom
     /// button or a group seam, never usefully both at once, but neither
@@ -3592,13 +3650,17 @@ final class WindowLayoutService: ObservableObject {
     /// exactly what Phase 5's linked resize already reacts to, and a hint
     /// bar drawn on top of that would only be visual noise.
     private func handleDividerHintMouseMoved(atQuartzPoint point: CGPoint) {
-        guard dividerHintEnabled, edgeSnapDrag == nil, edgeSnapPressOrigin == nil else {
-            cancelDividerHint()
-            return
-        }
+        // Throttle first, before any UserDefaults/Accessibility read — see
+        // `handleZoomHoverMouseMoved`'s own comment on why this has to be
+        // the very first thing that runs.
         let now = ProcessInfo.processInfo.systemUptime
         guard now - dividerHintLastSampleAt >= Self.dividerHintSampleInterval else { return }
         dividerHintLastSampleAt = now
+
+        guard dividerHintEnabledCached(now: now), edgeSnapDrag == nil, edgeSnapPressOrigin == nil else {
+            cancelDividerHint()
+            return
+        }
 
         let hoverPoint = appKitPoint(fromQuartz: point)
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(hoverPoint) }),
