@@ -24,6 +24,7 @@ struct WindowLayoutSettings: View {
         ? SnapAssistSupport.Mode.ask.rawValue
         : SnapAssistSupport.Mode.off.rawValue
     @AppStorage(DefaultsKey.windowSnapLinkedResizeEnabled) private var snapLinkedResizeEnabled = true
+    @AppStorage(DefaultsKey.windowSnapRestoreSizeOnDrag) private var snapRestoreSizeEnabled = true
     @AppStorage(DefaultsKey.windowGestureEnabled) private var gestureEnabled = false
     @AppStorage(DefaultsKey.windowGestureModifiers) private var gestureModifiers = WindowGestureSupport.defaultModifierStorageValue
     @AppStorage(DefaultsKey.windowGestureRaiseWindow) private var gestureRaiseWindow = false
@@ -111,6 +112,13 @@ struct WindowLayoutSettings: View {
                             WindowLayoutService.shared.syncWithPreferences()
                         }
                     Text(text.snapLinkedResizeCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // No onChange/syncWithPreferences call: read from the
+                    // same notification handler linked resize already
+                    // watches, never a tap of its own.
+                    Toggle(text.snapRestoreSizeEnable, isOn: $snapRestoreSizeEnabled)
+                    Text(text.snapRestoreSizeCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

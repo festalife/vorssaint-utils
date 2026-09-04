@@ -14,6 +14,16 @@ struct SnapGroupMember: Equatable {
     let windowID: CGWindowID
     var action: WindowLayoutAction
     var frame: CGRect
+    /// The window's size the moment before it first joined this group (spec
+    /// §1's last row: dragging a snapped member away by its title bar
+    /// restores this). Carried forward unchanged across every re-snap to a
+    /// new zone while the window stays in the group — see `updated(...)` —
+    /// so a window snapped left, then re-snapped to a corner, still
+    /// restores to the size it had before the *first* of those snaps, not
+    /// the corner's own size. `nil` only for a member built by hand (tests)
+    /// without one; every member `WindowLayoutService` actually creates has
+    /// one, since `updateSnapGroup` always supplies the pre-placement frame.
+    var restoreSize: CGSize? = nil
 }
 
 /// The windows currently snapped together on one screen. Vorssaint keeps one
@@ -199,17 +209,28 @@ enum SnapGroupSupport {
     /// joins a group at all — maximizing, restoring, going full screen,
     /// centering or crossing to another display all simply drop the window
     /// instead.
+    /// `preSnapSize` is the window's own size the instant before *this*
+    /// placement — `WindowLayoutService` always has it (the AX frame it
+    /// read right before calling `setFrame`) and always passes it. Ignored
+    /// unless `windowID` is newly joining the group with no `restoreSize`
+    /// of its own yet: a member already in the group keeps the
+    /// `restoreSize` it joined with across every further re-snap, per
+    /// `SnapGroupMember.restoreSize`'s own doc comment.
     static func updated(group: SnapGroup,
                         windowID: CGWindowID,
                         action: WindowLayoutAction,
                         appliedFrame: CGRect,
+                        preSnapSize: CGSize,
                         currentFrames: [CGWindowID: CGRect],
                         goneOrMinimized: Set<CGWindowID> = [],
                         gap: CGFloat = 0) -> SnapGroup {
+        let existingRestoreSize = group.members.first { $0.windowID == windowID }?.restoreSize
         var result = pruned(group: group, currentFrames: currentFrames, goneOrMinimized: goneOrMinimized, gap: gap)
         result.members.removeAll { $0.windowID == windowID }
         if joinsGroup(action) {
-            result.members.append(SnapGroupMember(windowID: windowID, action: action, frame: appliedFrame))
+            let restoreSize = existingRestoreSize ?? preSnapSize
+            result.members.append(SnapGroupMember(windowID: windowID, action: action,
+                                                  frame: appliedFrame, restoreSize: restoreSize))
         }
         return result
     }

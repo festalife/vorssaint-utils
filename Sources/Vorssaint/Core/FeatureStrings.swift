@@ -271,7 +271,9 @@ extension WindowLayoutFeatureStrings {
         snapAssistModeAuto: "자동(즉시 채우기)",
         snapAssistModeOff: "끄기",
         snapEarlyEdgeEnable: "가장자리에 닿기 전에 미리 붙이기",
-        snapEarlyEdgeCaption: "포인터가 화면 가장자리에서 조금만 떨어져 있어도 절반/모서리 배치가 시작됩니다."
+        snapEarlyEdgeCaption: "포인터가 화면 가장자리에서 조금만 떨어져 있어도 절반/모서리 배치가 시작됩니다.",
+        snapRestoreSizeEnable: "끌어서 떼면 원래 크기로 복원",
+        snapRestoreSizeCaption: "붙인 창을 제목 표시줄로 끌어서 떼면 붙이기 전 크기로 돌아가며, 포인터 아래 위치를 유지합니다."
     )
 }
 
@@ -1254,6 +1256,8 @@ struct WindowLayoutFeatureStrings {
     let snapAssistModeOff: String
     let snapEarlyEdgeEnable: String
     let snapEarlyEdgeCaption: String
+    let snapRestoreSizeEnable: String
+    let snapRestoreSizeCaption: String
 
     static let enUS = WindowLayoutFeatureStrings(
         title: "Window layout",
@@ -1338,7 +1342,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Auto (fill immediately)",
         snapAssistModeOff: "Off",
         snapEarlyEdgeEnable: "Snap before reaching the edge",
-        snapEarlyEdgeCaption: "Halves and corners activate a little before the pointer actually touches the screen edge."
+        snapEarlyEdgeCaption: "Halves and corners activate a little before the pointer actually touches the screen edge.",
+        snapRestoreSizeEnable: "Restore size when dragged away",
+        snapRestoreSizeCaption: "Dragging a snapped window away by its title bar returns it to the size it had before it was snapped, staying under the pointer."
     )
 
     static let ptBR = WindowLayoutFeatureStrings(
@@ -1424,7 +1430,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Automático (preencher imediatamente)",
         snapAssistModeOff: "Desativado",
         snapEarlyEdgeEnable: "Encaixar antes de chegar à borda",
-        snapEarlyEdgeCaption: "Metades e cantos são ativados um pouco antes de o ponteiro tocar a borda da tela."
+        snapEarlyEdgeCaption: "Metades e cantos são ativados um pouco antes de o ponteiro tocar a borda da tela.",
+        snapRestoreSizeEnable: "Restaurar o tamanho ao arrastar para fora",
+        snapRestoreSizeCaption: "Arrastar uma janela encaixada pela barra de título a devolve ao tamanho que tinha antes de ser encaixada, mantendo-a sob o ponteiro."
     )
 
     static let tr = WindowLayoutFeatureStrings(
@@ -1510,7 +1518,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Otomatik (hemen doldur)",
         snapAssistModeOff: "Kapalı",
         snapEarlyEdgeEnable: "Kenara ulaşmadan önce yasla",
-        snapEarlyEdgeCaption: "İşaretçi ekranın kenarına tam değmeden yarımlar ve köşeler etkinleşir."
+        snapEarlyEdgeCaption: "İşaretçi ekranın kenarına tam değmeden yarımlar ve köşeler etkinleşir.",
+        snapRestoreSizeEnable: "Sürükleyince önceki boyuta dön",
+        snapRestoreSizeCaption: "Yaslanmış bir pencereyi başlık çubuğundan sürüklemek, işaretçinin altında kalarak yaslanmadan önceki boyutuna döndürür."
     )
 
     static let ru = WindowLayoutFeatureStrings(
@@ -1596,7 +1606,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Автоматически (заполнить сразу)",
         snapAssistModeOff: "Выключено",
         snapEarlyEdgeEnable: "Прилипание до достижения края",
-        snapEarlyEdgeCaption: "Половины и углы активируются чуть раньше, чем указатель на самом деле коснётся края экрана."
+        snapEarlyEdgeCaption: "Половины и углы активируются чуть раньше, чем указатель на самом деле коснётся края экрана.",
+        snapRestoreSizeEnable: "Восстанавливать размер при перетаскивании",
+        snapRestoreSizeCaption: "Перетаскивание прикреплённого окна за заголовок возвращает ему размер, который был до прилипания, оставляя его под указателем."
     )
 
     static let es = WindowLayoutFeatureStrings(
@@ -1682,7 +1694,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Automático (llenar de inmediato)",
         snapAssistModeOff: "Desactivado",
         snapEarlyEdgeEnable: "Ajustar antes de llegar al borde",
-        snapEarlyEdgeCaption: "Las mitades y esquinas se activan un poco antes de que el puntero toque el borde de la pantalla."
+        snapEarlyEdgeCaption: "Las mitades y esquinas se activan un poco antes de que el puntero toque el borde de la pantalla.",
+        snapRestoreSizeEnable: "Restaurar el tamaño al arrastrar",
+        snapRestoreSizeCaption: "Arrastrar una ventana ajustada por su barra de título le devuelve el tamaño que tenía antes de ajustarse, manteniéndola bajo el puntero."
     )
 
     static let de = WindowLayoutFeatureStrings(
@@ -1768,7 +1782,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Automatisch (sofort füllen)",
         snapAssistModeOff: "Aus",
         snapEarlyEdgeEnable: "Andocken, bevor der Rand erreicht ist",
-        snapEarlyEdgeCaption: "Hälften und Ecken werden schon kurz bevor der Zeiger den Bildschirmrand berührt aktiviert."
+        snapEarlyEdgeCaption: "Hälften und Ecken werden schon kurz bevor der Zeiger den Bildschirmrand berührt aktiviert.",
+        snapRestoreSizeEnable: "Größe beim Wegziehen wiederherstellen",
+        snapRestoreSizeCaption: "Ein angedocktes Fenster an der Titelleiste wegzuziehen stellt seine Größe von vor dem Andocken wieder her und hält es dabei unter dem Zeiger."
     )
 
     static let fr = WindowLayoutFeatureStrings(
@@ -1854,7 +1870,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Automatique (remplir aussitôt)",
         snapAssistModeOff: "Désactivé",
         snapEarlyEdgeEnable: "Ancrer avant d’atteindre le bord",
-        snapEarlyEdgeCaption: "Les moitiés et les coins s’activent juste avant que le pointeur ne touche réellement le bord de l’écran."
+        snapEarlyEdgeCaption: "Les moitiés et les coins s’activent juste avant que le pointeur ne touche réellement le bord de l’écran.",
+        snapRestoreSizeEnable: "Restaurer la taille en le faisant glisser",
+        snapRestoreSizeCaption: "Faire glisser une fenêtre ancrée par sa barre de titre lui redonne la taille qu’elle avait avant l’ancrage, tout en restant sous le pointeur."
     )
 
     static let it = WindowLayoutFeatureStrings(
@@ -1940,7 +1958,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "Automatico (riempi subito)",
         snapAssistModeOff: "Disattivato",
         snapEarlyEdgeEnable: "Aggancia prima di raggiungere il bordo",
-        snapEarlyEdgeCaption: "Metà e angoli si attivano poco prima che il puntatore tocchi davvero il bordo dello schermo."
+        snapEarlyEdgeCaption: "Metà e angoli si attivano poco prima che il puntatore tocchi davvero il bordo dello schermo.",
+        snapRestoreSizeEnable: "Ripristina le dimensioni se trascinata via",
+        snapRestoreSizeCaption: "Trascinare una finestra agganciata dalla barra del titolo le restituisce le dimensioni che aveva prima di essere agganciata, restando sotto il puntatore."
     )
 
     static let ja = WindowLayoutFeatureStrings(
@@ -2026,7 +2046,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "自動（すぐに埋める）",
         snapAssistModeOff: "オフ",
         snapEarlyEdgeEnable: "端に到達する前にスナップする",
-        snapEarlyEdgeCaption: "ポインタが画面の端に実際に触れる少し前に、半分や角の配置が有効になります。"
+        snapEarlyEdgeCaption: "ポインタが画面の端に実際に触れる少し前に、半分や角の配置が有効になります。",
+        snapRestoreSizeEnable: "ドラッグで離すと元のサイズに戻す",
+        snapRestoreSizeCaption: "スナップしたウィンドウをタイトルバーでドラッグして離すと、スナップ前のサイズに戻り、ポインタの下に留まります。"
     )
 
     static let zhHans = WindowLayoutFeatureStrings(
@@ -2112,7 +2134,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "自动（立即填充）",
         snapAssistModeOff: "关闭",
         snapEarlyEdgeEnable: "靠近边缘时提前贴靠",
-        snapEarlyEdgeCaption: "指针尚未真正碰到屏幕边缘时，半屏和角落布局就会提前启用。"
+        snapEarlyEdgeCaption: "指针尚未真正碰到屏幕边缘时，半屏和角落布局就会提前启用。",
+        snapRestoreSizeEnable: "拖离时恢复原始大小",
+        snapRestoreSizeCaption: "用标题栏把已贴靠的窗口拖离时，会恢复到贴靠前的大小，并保持在指针下方。"
     )
 
     static let zhTW = WindowLayoutFeatureStrings(
@@ -2198,7 +2222,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "自動（立即填入）",
         snapAssistModeOff: "關閉",
         snapEarlyEdgeEnable: "靠近邊緣時提前貼齊",
-        snapEarlyEdgeCaption: "指標尚未真正碰到螢幕邊緣時，半螢幕與角落配置就會提前啟用。"
+        snapEarlyEdgeCaption: "指標尚未真正碰到螢幕邊緣時，半螢幕與角落配置就會提前啟用。",
+        snapRestoreSizeEnable: "拖曳離開時還原大小",
+        snapRestoreSizeCaption: "用標題列把已貼齊的視窗拖曳離開時，會還原成貼齊前的大小，並保持在指標下方。"
     )
 
     static let zhHK = WindowLayoutFeatureStrings(
@@ -2284,7 +2310,9 @@ struct WindowLayoutFeatureStrings {
         snapAssistModeAuto: "自動（即時填入）",
         snapAssistModeOff: "關閉",
         snapEarlyEdgeEnable: "靠近邊緣時提前貼齊",
-        snapEarlyEdgeCaption: "指標仲未真正掂到螢幕邊緣時，半螢幕同角落配置就會提前啟用。"
+        snapEarlyEdgeCaption: "指標仲未真正掂到螢幕邊緣時，半螢幕同角落配置就會提前啟用。",
+        snapRestoreSizeEnable: "拖曳離開時還原大小",
+        snapRestoreSizeCaption: "用標題列將已貼齊嘅視窗拖曳離開時，會還原返貼齊之前嘅大小，並保持喺指標下方。"
     )
 }
 

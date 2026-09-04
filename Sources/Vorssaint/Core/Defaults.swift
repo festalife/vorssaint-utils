@@ -595,6 +595,9 @@ enum DefaultsKey {
     // back to `windowSnapAssistEnabled` for anyone who already set that.
     static let windowSnapAssistMode = "windowSnapAssistMode"
     static let windowSnapLinkedResizeEnabled = "windowSnapLinkedResizeEnabled"
+    // Spec §1's last row: dragging a snapped member away by its title bar
+    // restores its pre-snap size. See `SnapRestoreOnDragSupport`.
+    static let windowSnapRestoreSizeOnDrag = "windowSnapRestoreSizeOnDrag"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1328,6 +1331,10 @@ enum Defaults {
         // fires once a real Snap Group with a touching neighbour already
         // exists, so it never surfaces new behavior by itself.
         DefaultsKey.windowSnapLinkedResizeEnabled: true,
+        // On by default, matching Windows' own drag-away restore; it only
+        // ever fires once a real Snap Group member is actually dragged off
+        // its zone, so it never surfaces new behavior by itself.
+        DefaultsKey.windowSnapRestoreSizeOnDrag: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,

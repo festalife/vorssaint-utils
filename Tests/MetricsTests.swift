@@ -6254,17 +6254,22 @@ struct MetricsTests {
                                                        windowID: 1,
                                                        action: .maximize,
                                                        appliedFrame: CGRect(x: 0, y: 0, width: 1000, height: 600),
+                                                       preSnapSize: sgLeftZone.size,
                                                        currentFrames: [1: sgLeftZone])
         expect(sgAfterMaximize.members.isEmpty,
                "maximizing a group member removes it instead of updating its zone")
 
+        let sgPreSnapSize = CGSize(width: 640, height: 480)
         let sgAfterRightHalf = SnapGroupSupport.updated(group: sgGroup,
                                                         windowID: 1,
                                                         action: .rightHalf,
                                                         appliedFrame: sgRightZone,
+                                                        preSnapSize: sgPreSnapSize,
                                                         currentFrames: [1: sgLeftZone])
-        expect(sgAfterRightHalf.members == [SnapGroupMember(windowID: 1, action: .rightHalf, frame: sgRightZone)],
-               "re-snapping a group member to a new zone replaces its old membership rather than adding a second one")
+        expect(sgAfterRightHalf.members == [SnapGroupMember(windowID: 1, action: .rightHalf, frame: sgRightZone,
+                                                             restoreSize: sgPreSnapSize)],
+               "re-snapping a group member to a new zone replaces its old membership rather than adding a second one, " +
+               "picking up a restoreSize since sgLeftMember never had one")
 
         sgGroup = SnapGroup(screenID: 1, members: [sgLeftMember])
         let sgGroupOnOtherScreen = SnapGroup(screenID: 2)
@@ -6272,6 +6277,7 @@ struct MetricsTests {
                                                             windowID: 5,
                                                             action: .leftHalf,
                                                             appliedFrame: sgLeftZone,
+                                                            preSnapSize: CGSize(width: 500, height: 400),
                                                             currentFrames: [1: sgLeftZone])
         expect(sgGroupWithNewMember.members.count == 2 && sgGroupOnOtherScreen.members.isEmpty,
                "each screen keeps its own independent group; updating one never touches another's")
@@ -6320,6 +6326,7 @@ struct MetricsTests {
                                                           windowID: 10,
                                                           action: .leftHalf,
                                                           appliedFrame: sgRealLeftZone,
+                                                          preSnapSize: CGSize(width: 400, height: 949),
                                                           currentFrames: [:])
         expect(SnapGroupSupport.freeSpace(for: .rightHalf,
                                           theoreticalZone: sgRealRightZone,
@@ -6966,6 +6973,67 @@ struct MetricsTests {
         expect(slrSeamAGrowAdjustments == [.init(windowID: 102, frame: CGRect(x: 900, y: 0, width: 612, height: 949))],
                "grabbing A's own edge (not B's) still finds the free-space-placed B touching through the " +
                "theoretical zones, and shrinks B's true 812pt-wide live frame down to 612pt")
+
+        // MARK: Snap Restore On Drag
+
+        let srodZone = CGRect(x: 0, y: 0, width: 700, height: 900)
+        let srodMemberWithRestore = SnapGroupMember(windowID: 1, action: .leftHalf, frame: srodZone,
+                                                    restoreSize: CGSize(width: 640, height: 480))
+        let srodMemberWithoutRestore = SnapGroupMember(windowID: 2, action: .leftHalf, frame: srodZone)
+
+        expect(!SnapRestoreOnDragSupport.shouldRestore(member: srodMemberWithRestore, newFrame: srodZone, gap: 0),
+               "still anchored to its own zone — a resize, not a drag-away — never restores")
+        expect(!SnapRestoreOnDragSupport.shouldRestore(member: srodMemberWithoutRestore,
+                                                       newFrame: CGRect(x: 400, y: 300, width: 700, height: 900),
+                                                       gap: 0),
+               "no recorded restoreSize at all (a member built without one) never restores")
+        expect(SnapRestoreOnDragSupport.shouldRestore(member: srodMemberWithRestore,
+                                                       newFrame: CGRect(x: 400, y: 300, width: 700, height: 900),
+                                                       gap: 0),
+               "dragged off its anchored left-half edges, with a restoreSize recorded: restores")
+        expect(!SnapRestoreOnDragSupport.shouldRestore(member: srodMemberWithRestore,
+                                                       newFrame: CGRect(x: 0, y: 0, width: 900, height: 900),
+                                                       gap: 0),
+               "widened only along its unanchored inner edge (leftHalf's own maxX), every anchored edge " +
+               "(minX/minY/maxY) is untouched, so this is a resize, not a drag-away, and never restores")
+
+        let srodCurrentFrame = CGRect(x: 100, y: 100, width: 700, height: 900)
+        let srodRestoreSize = CGSize(width: 640, height: 480)
+        let srodCenterCursor = CGPoint(x: srodCurrentFrame.midX, y: srodCurrentFrame.midY)
+        let srodRestoredAtCenter = SnapRestoreOnDragSupport.restoredFrame(currentFrame: srodCurrentFrame,
+                                                                          restoreSize: srodRestoreSize,
+                                                                          cursor: srodCenterCursor)
+        expect(srodRestoredAtCenter.size == srodRestoreSize, "the restored frame is always exactly restoreSize")
+        expect(abs(srodRestoredAtCenter.midX - srodCenterCursor.x) < 0.01
+               && abs(srodRestoredAtCenter.midY - srodCenterCursor.y) < 0.01,
+               "grabbed at dead center, the restored frame stays centered on the cursor too")
+
+        let srodTopLeftCursor = CGPoint(x: srodCurrentFrame.minX, y: srodCurrentFrame.minY)
+        let srodRestoredAtTopLeft = SnapRestoreOnDragSupport.restoredFrame(currentFrame: srodCurrentFrame,
+                                                                           restoreSize: srodRestoreSize,
+                                                                           cursor: srodTopLeftCursor)
+        expect(srodRestoredAtTopLeft.origin == srodTopLeftCursor,
+               "grabbed at the frame's own origin (fraction 0,0), the restored frame keeps that same corner under the cursor")
+
+        let srodQuarterCursor = CGPoint(x: srodCurrentFrame.minX + srodCurrentFrame.width * 0.25,
+                                        y: srodCurrentFrame.minY + srodCurrentFrame.height * 0.25)
+        let srodRestoredAtQuarter = SnapRestoreOnDragSupport.restoredFrame(currentFrame: srodCurrentFrame,
+                                                                           restoreSize: srodRestoreSize,
+                                                                           cursor: srodQuarterCursor)
+        expect(abs((srodQuarterCursor.x - srodRestoredAtQuarter.minX) / srodRestoreSize.width - 0.25) < 0.01
+               && abs((srodQuarterCursor.y - srodRestoredAtQuarter.minY) / srodRestoreSize.height - 0.25) < 0.01,
+               "grabbed a quarter of the way in on each axis, the cursor sits a quarter of the way into the smaller restored frame too")
+
+        let srodCursorPastEdge = CGPoint(x: srodCurrentFrame.maxX + 500, y: srodCurrentFrame.midY)
+        let srodRestoredClamped = SnapRestoreOnDragSupport.restoredFrame(currentFrame: srodCurrentFrame,
+                                                                         restoreSize: srodRestoreSize,
+                                                                         cursor: srodCursorPastEdge)
+        expect(srodRestoredClamped.maxX == srodCurrentFrame.maxX,
+               "a cursor read that arrived past the frame's own edge is clamped, not extrapolated off screen")
+
+        expect(SnapRestoreOnDragSupport.restoredFrame(currentFrame: .zero, restoreSize: srodRestoreSize,
+                                                       cursor: .zero) == CGRect(origin: .zero, size: srodRestoreSize),
+               "a degenerate zero-size current frame still returns a usable restored rect at its own origin")
 
         // MARK: Window move and resize gestures
 

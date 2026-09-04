@@ -803,6 +803,7 @@ final class WindowLayoutService: ObservableObject {
                                                windowID: windowID,
                                                action: action,
                                                appliedFrame: appliedRect,
+                                               preSnapSize: appKitFrame(fromAX: fallbackFrame).size,
                                                currentFrames: snapshot.frames,
                                                goneOrMinimized: snapshot.goneOrMinimized,
                                                gap: WindowLayoutGaps.windowGap)
@@ -1866,6 +1867,35 @@ final class WindowLayoutService: ObservableObject {
     /// against the group's stored zone for that member — the same
     /// reference `SnapGroupSupport` uses everywhere else — and, if that is
     /// a genuine resize touching a neighbour, applies the adjustments.
+    /// Whether spec §1's drag-away restore is on — checked, like every
+    /// other Window Layout toggle, right before it can matter rather than
+    /// cached.
+    private var restoreSizeOnDragEnabled: Bool {
+        UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapRestoreSizeOnDrag)
+    }
+
+    /// Writes `member`'s pre-snap size back, keeping it under the pointer's
+    /// current position (`NSEvent.mouseLocation`, the same global AppKit
+    /// space `newFrame` is already in) via `SnapRestoreOnDragSupport
+    /// .restoredFrame`, then drops it from every group — it is no longer
+    /// snapped, exactly like any other window moved by hand. Reuses
+    /// `writeLinkedResizeFrame` so this write is marked self-initiated the
+    /// same way a linked-resize write is, and never mistaken for a second,
+    /// independent drag once its own notification arrives.
+    private func performRestoreOnDrag(windowID: CGWindowID, member: SnapGroupMember, newFrame: CGRect, label: String) {
+        guard let restoreSize = member.restoreSize else { return }
+        let cursor = NSEvent.mouseLocation
+        let restored = SnapRestoreOnDragSupport.restoredFrame(currentFrame: newFrame,
+                                                               restoreSize: restoreSize,
+                                                               cursor: cursor)
+        Self.linkedResizeLog.debug("""
+            restore-on-drag \(windowID) \(label, privacy: .public): left its zone, restoring to \
+            \(String(describing: restored), privacy: .public)
+            """)
+        writeLinkedResizeFrame(restored, windowID: windowID)
+        removeFromAllSnapGroups(windowID)
+    }
+
     private func processLinkedResize(windowID: CGWindowID) {
         linkedResizePendingWindows.remove(windowID)
         guard linkedResizeFeatureAvailable else {
@@ -1948,6 +1978,24 @@ final class WindowLayoutService: ObservableObject {
         let sizeDelta = max(abs(newFrame.width - oldFrame.width), abs(newFrame.height - oldFrame.height))
         if sizeDelta > SnapLinkedResizeSupport.moveSizeTolerance {
             hideSnapAssist()
+        }
+
+        // Spec §1's last row: a plain move (never a resize — `sizeDelta`
+        // uses the exact tolerance `SnapLinkedResizeSupport.adjustments`
+        // itself uses to tell the two apart) that carried the member off
+        // its own zone is a title-bar drag-away, not a reshape of the
+        // layout. Restoring here, before `adjustments` even runs, is what
+        // keeps this from ever fighting the linked-resize path: a genuine
+        // resize never reaches this branch (`stillAnchored` stays true for
+        // a resize along the snapped edge, by the same rule the group's own
+        // lazy prune uses), so the two features can never both react to the
+        // same notification.
+        if sizeDelta <= SnapLinkedResizeSupport.moveSizeTolerance,
+           restoreSizeOnDragEnabled,
+           SnapRestoreOnDragSupport.shouldRestore(member: resizedMember, newFrame: newFrame,
+                                                  gap: WindowLayoutGaps.windowGap) {
+            performRestoreOnDrag(windowID: windowID, member: resizedMember, newFrame: newFrame, label: label)
+            return
         }
 
         guard let screen = NSScreen.screens.first(where: { $0.displayID == group.screenID }) else {
