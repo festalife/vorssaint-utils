@@ -842,7 +842,18 @@ final class WindowLayoutService: ObservableObject {
         guard snapAssistEnabled,
               SnapGroupSupport.joinsGroup(action),
               let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
-        else { snapAssistSession = nil; hideSnapAssist(); return }
+        else {
+            if Self.snapAssistDebugLogging {
+                let detail = "handleSnapAssist bailing before any session logic: action=\(action) " +
+                    "windowID=\(windowID) fromSnapAssist=\(fromSnapAssist) enabled=\(self.snapAssistEnabled) " +
+                    "joinsGroup=\(SnapGroupSupport.joinsGroup(action)) " +
+                    "screenResolved=\(self.screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame) != nil)"
+                Self.snapAssistLog.debug("\(detail, privacy: .public)")
+            }
+            snapAssistSession = nil
+            hideSnapAssist()
+            return
+        }
 
         if fromSnapAssist {
             // A pick can only ever advance the session it was made from —
@@ -880,11 +891,17 @@ final class WindowLayoutService: ObservableObject {
         // cells" — halves with both halves now filled naturally yields no
         // session at all, ending Marco's loop.
         let occupied = occupiedSiblingCells(of: action, on: screen, excluding: windowID)
-        guard let session = SnapAssistSupport.SnapAssistSession.start(from: action,
-                                                                       screenID: screen.displayID,
-                                                                       occupiedCells: occupied),
-              let cell = session.currentCell
-        else {
+        let session = SnapAssistSupport.SnapAssistSession.start(from: action,
+                                                                 screenID: screen.displayID,
+                                                                 occupiedCells: occupied)
+        if Self.snapAssistDebugLogging {
+            let detail = "handleSnapAssist user-initiated: action=\(action) " +
+                "windowID=\(windowID) siblings=\(SnapAssistSupport.siblingZones(of: action)) " +
+                "occupied=\(occupied) " +
+                "session=\(session.map { String(describing: $0.freeCells) } ?? "nil (no free cells)")"
+            Self.snapAssistLog.debug("\(detail, privacy: .public)")
+        }
+        guard let session, let cell = session.currentCell else {
             snapAssistSession = nil
             hideSnapAssist()
             return
@@ -895,18 +912,21 @@ final class WindowLayoutService: ObservableObject {
     }
 
     /// Which of `action`'s sibling cells (`SnapAssistSupport.siblingZones`)
-    /// already have some window — a Snap Group member or not — covering at
-    /// least half of them right now, per spec: "a cell is free only if no
-    /// window already covers ≥50% of it." Read from live on-screen window
-    /// frames (`onScreenWindows`), not from Snap Group membership, which is
-    /// only ever a record of windows *this feature* placed and would miss
-    /// one the person dragged into place by hand.
+    /// already have some window — a Snap Group member or not — covering
+    /// `SnapAssistSupport.occupiedCoverageThreshold` or more of them right
+    /// now: essentially filling the cell, not merely sitting somewhere that
+    /// happens to overlap it (see that constant's own doc comment for the
+    /// on-device finding that set the bar there). Read from live on-screen
+    /// window frames (`onScreenWindows`), not from Snap Group membership,
+    /// which is only ever a record of windows *this feature* placed and
+    /// would miss one the person dragged into place by hand.
     private func occupiedSiblingCells(of action: WindowLayoutAction,
                                       on screen: NSScreen,
                                       excluding windowID: CGWindowID) -> Set<WindowLayoutAction> {
         let cells = SnapAssistSupport.siblingZones(of: action)
         guard !cells.isEmpty else { return [] }
-        let frames = onScreenWindows(on: screen).filter { $0.windowID != windowID }.map(\.appKitFrame)
+        let onScreen = onScreenWindows(on: screen).filter { $0.windowID != windowID }
+        let frames = onScreen.map(\.appKitFrame)
         var occupied: Set<WindowLayoutAction> = []
         for cell in cells {
             let rect = WindowLayoutGeometry.rect(for: cell,
@@ -914,7 +934,21 @@ final class WindowLayoutService: ObservableObject {
                                                  visibleFrame: screen.visibleFrame,
                                                  windowGap: WindowLayoutGaps.windowGap,
                                                  screenGap: WindowLayoutGaps.screenGap)
-            if SnapAssistSupport.cellIsOccupied(cellFrame: rect, by: frames) {
+            let isOccupied = SnapAssistSupport.cellIsOccupied(cellFrame: rect, by: frames)
+            if Self.snapAssistDebugLogging {
+                let cellArea = rect.width * rect.height
+                let coverage = onScreen.map { window -> String in
+                    let overlap = rect.intersection(window.appKitFrame)
+                    let ratio = (overlap.isNull || cellArea <= 0) ? 0 : (overlap.width * overlap.height) / cellArea
+                    return "windowID=\(window.windowID) pid=\(window.ownerPID) " +
+                           "appKitFrame=\(window.appKitFrame) coverage=\(String(format: "%.2f", ratio))"
+                }.joined(separator: " | ")
+                let detail = "occupiedSiblingCells cell=\(cell) " +
+                    "cellRect=\(rect) occupied=\(isOccupied) " +
+                    "windows: \(coverage.isEmpty ? "(none on screen)" : coverage)"
+                Self.snapAssistLog.debug("\(detail, privacy: .public)")
+            }
+            if isOccupied {
                 occupied.insert(cell)
             }
         }
@@ -956,9 +990,20 @@ final class WindowLayoutService: ObservableObject {
         // same bailout `SnapGroupSupport.freeSpace` already applies to an
         // oversized minimum window.
         guard SnapAssistSupport.isOfferable(freeRect: freeRect) else {
+            if Self.snapAssistDebugLogging {
+                let detail = "presentCell: freeRect not offerable, hiding. cell=\(cell) " +
+                    "theoreticalZone=\(theoreticalZone) " +
+                    "freeRect=\(freeRect)"
+                Self.snapAssistLog.debug("\(detail, privacy: .public)")
+            }
             snapAssistSession = nil
             hideSnapAssist()
             return
+        }
+        if Self.snapAssistDebugLogging {
+            let detail = "presentCell: presenting cell=\(cell) " +
+                "freeRect=\(freeRect) itemCount=\(items.count)"
+            Self.snapAssistLog.debug("\(detail, privacy: .public)")
         }
         presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen)
     }
@@ -1004,12 +1049,34 @@ final class WindowLayoutService: ObservableObject {
         }
     }
 
-    /// A window's title via Accessibility, the same source `WindowEnumerator`
-    /// itself reads from — never `kCGWindowName`, which needs Screen
-    /// Recording permission to be populated at all on a modern macOS.
-    private func windowTitle(windowID: CGWindowID, in axApp: AXUIElement) -> String? {
-        guard let window = axElement(windowID: windowID, in: axApp) else { return nil }
-        return stringAttribute(window, kAXTitleAttribute as String)
+    /// Whether `window` could actually be placed by a Snap Assist pick —
+    /// the same core checks `target(from:)` applies to every other
+    /// placement path (real `AXWindow` role, not a floating/dialog
+    /// auxiliary window, big enough to be worth tiling, and genuinely
+    /// resizable), applied here too so a candidate that would silently fail
+    /// to move is never offered in the first place. On-device testing found
+    /// exactly this: Chrome's own small, fixed-size "Chi usa Chrome?"
+    /// profile-picker window was offered, and picking it raised the window
+    /// without ever moving or resizing it — `AXUIElementIsAttributeSettable`
+    /// for `kAXSizeAttribute` returns false for it, so `canSetFrame` alone
+    /// would have caught it before it was ever shown as a card.
+    /// `allowMinimized` is `true` only for the separate minimized-window
+    /// walk in `snapAssistCandidates`, which is offering exactly those
+    /// windows on purpose (spec §4 point 2) — everywhere else a minimized
+    /// window is never placeable as-is. `canSetFrame` is skipped for a
+    /// minimized window too: `activateSnapAssistTarget` un-minimizes before
+    /// ever writing a frame, and `AXUIElementIsAttributeSettable` for
+    /// `kAXPositionAttribute`/`kAXSizeAttribute` on a still-minimized window
+    /// is not a reliable predictor of whether it will be resizable once
+    /// restored, so checking it here risks dropping a perfectly placeable
+    /// window rather than the unplaceable ones this exists to catch.
+    private func isPlaceableSnapAssistCandidate(_ window: AXUIElement, allowMinimized: Bool = false) -> Bool {
+        guard role(of: window) == (kAXWindowRole as String),
+              allowMinimized || !boolAttribute(window, kAXMinimizedAttribute as String),
+              stringAttribute(window, kAXSubroleAttribute as String) != "AXFloatingWindow",
+              frame(of: window).map({ $0.size.width > 80 && $0.size.height > 80 }) ?? false
+        else { return false }
+        return allowMinimized || canSetFrame(on: window)
     }
 
     /// Debug record of one enumerated window and, if it was left out of the
@@ -1059,7 +1126,15 @@ final class WindowLayoutService: ObservableObject {
                 dropped[window.windowID] = "owner is not a regular running app"
                 continue
             }
-            let title = windowTitle(windowID: window.windowID, in: axApp(for: window.ownerPID)) ?? ""
+            guard let axWindow = axElement(windowID: window.windowID, in: axApp(for: window.ownerPID)) else {
+                dropped[window.windowID] = "no AXUIElement resolved for this window"
+                continue
+            }
+            guard isPlaceableSnapAssistCandidate(axWindow) else {
+                dropped[window.windowID] = "not placeable (role/subrole/size/resizability)"
+                continue
+            }
+            let title = stringAttribute(axWindow, kAXTitleAttribute as String) ?? ""
             itemsByWindowID[window.windowID] = .window(id: window.windowID,
                                                        title: title,
                                                        appName: app.localizedName ?? "",
@@ -1089,6 +1164,10 @@ final class WindowLayoutService: ObservableObject {
                     continue
                 }
                 guard itemsByWindowID[windowID] == nil else { continue }
+                guard isPlaceableSnapAssistCandidate(window, allowMinimized: true) else {
+                    dropped[windowID] = "not placeable (role/subrole/size)"
+                    continue
+                }
                 let title = stringAttribute(window, kAXTitleAttribute as String) ?? ""
                 let quartzFrame = frame(of: window).map { CGRect(origin: $0.origin, size: $0.size) } ?? .zero
                 itemsByWindowID[windowID] = .window(id: windowID,

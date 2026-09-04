@@ -119,8 +119,8 @@ enum SnapAssistSupport {
         /// Begins a session for a user-initiated placement of `action` on
         /// `screenID`. `occupiedCells` are `action`'s sibling cells
         /// (`siblingZones(of:)`) that some window — a Snap Group member or
-        /// not — already covers at least half of (`cellIsOccupied`); those
-        /// are never offered, matching Windows: a cell someone already
+        /// not — already covers `occupiedCoverageThreshold` or more of
+        /// (`cellIsOccupied`); those are never offered, matching Windows: a cell someone already
         /// parked a window in on purpose is not up for grabs. Returns `nil`
         /// when `action` has no siblings at all, or when every sibling is
         /// already occupied — there is nothing to open a session over
@@ -147,20 +147,38 @@ enum SnapAssistSupport {
         }
     }
 
+    /// How much of a cell's own area some window has to cover before
+    /// `cellIsOccupied` counts it as "parked there on purpose" rather than
+    /// merely passing through it. On-device testing (real desktop: Chrome,
+    /// WhatsApp, System Settings, a terminal, all in their ordinary,
+    /// never-snapped positions) found a much lower bar — half the cell's
+    /// area — false-positive constantly: a Chrome window sized 620×652
+    /// sitting where its owner last left it happened to cover 51% of a
+    /// 756×949 right-half cell purely by coincidence, which was enough to
+    /// mark the cell occupied and cancel the session before it opened,
+    /// with nothing on screen a person would call "already there" the way
+    /// a genuinely snapped sibling is. A window this app itself places into
+    /// a cell fills essentially all of it (minus the window/screen gap);
+    /// this threshold is set well above what an incidentally overlapping,
+    /// never-tiled window is likely to reach by chance, while still well
+    /// below what a real occupant covers.
+    static let occupiedCoverageThreshold: CGFloat = 0.9
+
     /// Whether some window in `frames` (AppKit space, matching `cellFrame`)
-    /// already covers at least half of `cellFrame` — a session's own
-    /// occupancy test at `start`. Any window counts, whether or not it is a
-    /// Snap Group member: unlike phase 2's neighbour-adjacency test (which
-    /// only ever needs to reason about group members shrinking each other's
-    /// free space), a fresh session has to catch a window the person put
-    /// there by hand outside any group too.
+    /// already covers `occupiedCoverageThreshold` or more of `cellFrame` —
+    /// a session's own occupancy test at `start`. Any window counts,
+    /// whether or not it is a Snap Group member: unlike phase 2's
+    /// neighbour-adjacency test (which only ever needs to reason about
+    /// group members shrinking each other's free space), a fresh session
+    /// has to catch a window the person put there by hand outside any
+    /// group too — just not one that merely happens to overlap it.
     static func cellIsOccupied(cellFrame: CGRect, by frames: [CGRect]) -> Bool {
         let cellArea = cellFrame.width * cellFrame.height
         guard cellArea > 0 else { return false }
         return frames.contains { frame in
             let overlap = cellFrame.intersection(frame)
             guard !overlap.isNull, !overlap.isEmpty else { return false }
-            return (overlap.width * overlap.height) / cellArea >= 0.5
+            return (overlap.width * overlap.height) / cellArea >= occupiedCoverageThreshold
         }
     }
 

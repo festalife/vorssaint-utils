@@ -6444,16 +6444,30 @@ struct MetricsTests {
                                                 by: [CGRect(x: 0, y: 0, width: 100, height: 100)]),
                "a window exactly covering the cell occupies it")
         expect(SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
-                                                by: [CGRect(x: 0, y: 0, width: 60, height: 100)]),
-               "a window covering exactly half the cell's area still counts as occupying it")
+                                                by: [CGRect(x: 0, y: 0, width: 92, height: 100)]),
+               "a window covering just over the 90% threshold counts as occupying it")
+        expect(!SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                                 by: [CGRect(x: 0, y: 0, width: 60, height: 100)]),
+               "a window merely overlapping 60% of the cell — never snapped there, just incidentally " +
+               "in the way, like the real Chrome window that first exposed this — does not occupy it")
         expect(!SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
                                                  by: [CGRect(x: 0, y: 0, width: 40, height: 100)]),
-               "a window covering less than half the cell does not occupy it")
+               "a window covering well under half the cell does not occupy it")
         expect(!SnapAssistSupport.cellIsOccupied(cellFrame: CGRect(x: 0, y: 0, width: 100, height: 100), by: []),
                "no windows at all means nothing occupies the cell")
         expect(!SnapAssistSupport.cellIsOccupied(cellFrame: .zero,
                                                  by: [CGRect(x: 0, y: 0, width: 100, height: 100)]),
                "a degenerate zero-area cell is never counted as occupied")
+
+        // The exact real-desktop numbers that exposed the 50% threshold as
+        // too low: a 620x652 Chrome window, never snapped anywhere, sitting
+        // at AppKit (700,230) inside a real 756x949 right-half cell at
+        // (756,0) covered 51% of it — enough to wrongly cancel the session
+        // before Snap Assist ever opened.
+        let saRealCell = CGRect(x: 756, y: 0, width: 756, height: 949)
+        let saRealChrome = CGRect(x: 700, y: 230, width: 620, height: 652)
+        expect(!SnapAssistSupport.cellIsOccupied(cellFrame: saRealCell, by: [saRealChrome]),
+               "the exact on-device Chrome frame that used to false-positive at 51% coverage no longer occupies the cell")
 
         // Marco's exact loop report, spelled out as the two sequences the
         // session state machine has to get right end to end:
