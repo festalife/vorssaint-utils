@@ -4,12 +4,41 @@
 import AppKit
 import Carbon.HIToolbox
 
+/// Field diagnosis for a click that never reaches a card — opted into with
+/// `VORSSAINT_SNAP_ASSIST_DEBUG`, the same env var `WindowLayoutService`
+/// already gates its own Snap Assist logging behind. Logs, for every
+/// left-mouse-down this panel's `sendEvent` sees, the event's window-space
+/// location, the panel's own frame, and what `hitTest` resolves that point
+/// to — the one place that can distinguish "the window never got the
+/// event" from "the window got it but routed it to the wrong view." Uses
+/// `NSLog` rather than `Logger.debug`: `debug`-level `os.Logger` messages
+/// are filtered out of `log stream` by default (a prior investigation on
+/// this feature lost time to exactly that before finding `--level debug`),
+/// and this diagnostic exists specifically to be grabbed off a running
+/// process with the least ceremony possible.
+private let snapAssistPanelDebugLogging =
+    ProcessInfo.processInfo.environment["VORSSAINT_SNAP_ASSIST_DEBUG"] != nil
+
 /// Borderless panels refuse key status by default, and this one genuinely
 /// needs it — see `SnapAssistPanel`'s own doc comment for why a real
 /// clickable panel needs a real key, activated window.
 private final class KeyableSnapAssistPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        guard snapAssistPanelDebugLogging, event.type == .leftMouseDown else {
+            super.sendEvent(event)
+            return
+        }
+        let windowPoint = event.locationInWindow
+        let hit = contentView?.hitTest(windowPoint)
+        let hitDescription = hit.map { String(describing: type(of: $0)) } ?? "nil"
+        NSLog("[snap-assist-panel] sendEvent leftMouseDown windowPoint=\(windowPoint) " +
+              "panelFrame=\(frame) contentViewFrame=\(String(describing: contentView?.frame)) " +
+              "hitTest=\(hitDescription) isKeyWindow=\(isKeyWindow)")
+        super.sendEvent(event)
+    }
 }
 
 /// Owns the floating Snap Assist overlay on `WindowLayoutService`'s behalf
@@ -114,12 +143,30 @@ final class SnapAssistPanel {
         content.configure(items: items, columns: columns, hint: hint, onSelect: onSelect)
 
         panel.setFrame(frame, display: true)
+        if snapAssistPanelDebugLogging {
+            NSLog("[snap-assist-panel] show computedFrame=\(frame) panelFrameAfterSetFrame=\(panel.frame) " +
+                  "contentViewFrame=\(String(describing: content.frame)) contentViewBounds=\(content.bounds) columns=\(columns) items=\(items.count)")
+        }
+        assert(!panel.ignoresMouseEvents,
+              "SnapAssistPanel must always accept mouse events — a card that cannot be clicked is the whole bug this type exists to avoid")
+
         let wasVisible = panel.isVisible
         if !wasVisible {
             panel.alphaValue = 0
         }
-        // A real activation, not just `makeKey()`: see the type's own doc
-        // comment for the real-Mac finding that made this necessary.
+        // `orderFrontRegardless()` first: it takes effect synchronously,
+        // independent of app activation, so the window server already
+        // considers this panel the frontmost window at this screen
+        // location before anything else runs. `NSApp.activate` (real
+        // activation, not just `makeKey()`; see the type's own doc comment
+        // for the real-Mac finding that made that necessary) and
+        // `makeKeyAndOrderFront` still follow, but a click landing in the
+        // gap between this call returning and activation actually
+        // completing now still hits this window, not whatever used to be
+        // frontmost underneath the free zone (e.g. the desktop) — the
+        // "click reached the wallpaper and triggered Show Desktop" failure
+        // mode a real-Mac report found.
+        panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         if !wasVisible {
@@ -210,6 +257,9 @@ final class SnapAssistPanel {
         panel.isReleasedWhenClosed = false
         panel.level = .statusBar
         panel.acceptsMouseMovedEvents = true
+        // Explicit, not just the AppKit default: a click on any card must
+        // never pass through to whatever sits behind the panel.
+        panel.ignoresMouseEvents = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.animationBehavior = .none
         self.panel = panel

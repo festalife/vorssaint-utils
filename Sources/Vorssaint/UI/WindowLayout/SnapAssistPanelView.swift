@@ -197,6 +197,14 @@ final class SnapAssistCardButton: NSButton {
     // the panel appears from ever being spent only bringing it forward.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func mouseDown(with event: NSEvent) {
+        if ProcessInfo.processInfo.environment["VORSSAINT_SNAP_ASSIST_DEBUG"] != nil {
+            NSLog("[snap-assist-panel] SnapAssistCardButton.mouseDown windowID=\(windowID) " +
+                  "locationInWindow=\(event.locationInWindow) bounds=\(bounds) frame=\(frame)")
+        }
+        super.mouseDown(with: event)
+    }
+
     @objc private func handleClick() {
         onSelect?()
     }
