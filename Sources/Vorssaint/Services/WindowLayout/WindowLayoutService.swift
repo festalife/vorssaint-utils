@@ -3218,12 +3218,37 @@ final class WindowLayoutService: ObservableObject {
         if target != drag.target {
             drag.target = target
             if let target {
-                showEdgeSnapPreview(frame: target.frame)
+                // Spec §1: the preview appears only after ~150ms of dwell
+                // at the edge, not instantly on the very sample that first
+                // resolves a target — but still disappears immediately
+                // (the `else` branch, unchanged) the moment the pointer
+                // leaves the zone, matching "sparisce subito uscendo dalla
+                // zona." `scheduleEdgeSnapPreview` re-checks the live target
+                // when its delay elapses, so a pointer that keeps moving
+                // through several zones inside 150ms never flashes any of
+                // the ones it only passed through.
+                scheduleEdgeSnapPreview(target)
             } else {
                 hideEdgeSnapPreview(immediately: false)
             }
         }
         edgeSnapDrag = drag
+    }
+
+    /// How long the pointer must hold still over one target before the live
+    /// preview appears (spec §1's "appare dopo ~150 ms di permanenza al
+    /// bordo").
+    private static let edgeSnapPreviewDelay: TimeInterval = 0.15
+
+    private func scheduleEdgeSnapPreview(_ target: WindowEdgeSnapTarget) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.edgeSnapPreviewDelay) { [weak self] in
+            // Nothing to cancel explicitly: if the drag ended or the target
+            // moved on in the meantime, `edgeSnapDrag?.target` no longer
+            // equals the one this closure captured, and the stale request
+            // is simply dropped here.
+            guard let self, self.edgeSnapDrag?.target == target else { return }
+            self.showEdgeSnapPreview(frame: target.frame)
+        }
     }
 
     private func edgeSnapTarget(atQuartzPoint point: CGPoint) -> WindowEdgeSnapTarget? {
