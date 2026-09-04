@@ -92,50 +92,64 @@ enum SnapLinkedResizeSupport {
     /// window dragged out of the group), or the edge that did move touches
     /// no neighbour.
     ///
-    /// `group` supplies every member's *zone* (`SnapGroupMember.frame`),
-    /// used only to decide adjacency — by the same tolerance and shared-edge
-    /// rule `SnapGroupSupport.freeSpace` applies inline for its own touching
-    /// test (kept as a private copy here, `touchingEdges` below, rather than
-    /// a shared call, since `SnapGroupSupport` evolves independently and a
-    /// shared helper would only ever be a source of rebase conflicts between
-    /// the two — the two tests are meant to keep agreeing by staying
-    /// identical in behavior, not by sharing code) — never to size
-    /// anything, so the two features can never disagree about which windows
-    /// are neighbours.
+    /// `theoreticalZones` supplies every member's *theoretical* zone — the
+    /// `WindowLayoutAction`'s own rect on that screen (halves/thirds/
+    /// quarters/sixths math, gap included), independent of anything a
+    /// free-space placement adjusted it to — used only to decide adjacency,
+    /// by the same tolerance and shared-edge rule `SnapGroupSupport
+    /// .freeSpace` applies inline for its own touching test (kept as a
+    /// private copy here, `touchingEdges` below, rather than a shared call,
+    /// since `SnapGroupSupport` evolves independently and a shared helper
+    /// would only ever be a source of rebase conflicts between the two —
+    /// the two tests are meant to keep agreeing by staying identical in
+    /// behavior, not by sharing code) — never to size anything, so the two
+    /// features can never disagree about which windows are neighbours.
     ///
-    /// **The caller must never update a member's zone as a result of a
-    /// linked resize — only a fresh placement may.** A zone is "fixed at
-    /// the moment it joined the group" by contract (see
-    /// `SnapGroupMember.frame`'s own doc comment); this function relies on
-    /// that holding for *every* member on *every* call, resized window
-    /// included, not only for the ones it happens to return an `Adjustment`
-    /// for. A real regression looked exactly like this: the caller wrote a
-    /// neighbour's live result back into its stored zone after a
-    /// successful step, but the resized window's own zone was only ever
-    /// touched on an explicit pushback (rare) — so after one ordinary,
-    /// unclamped step the two zones silently drifted out of the flush
-    /// relationship `touchingEdges` checks, and `adjustments` correctly,
-    /// uselessly, reported "not touching" on every following step of the
-    /// same drag. `currentFrames` supplies every member's
-    /// *live* frame, which is what actually gets resized; the resized
-    /// window's own live frame is `newFrame`, not whatever `currentFrames`
-    /// might also hold for it. A member missing from `currentFrames`
-    /// (closed, minimized, or Accessibility just could not read it this
-    /// tick) is skipped rather than guessed at. `minimumSize` is asked once
-    /// per neighbour for the smallest size that neighbour will accept —
-    /// Accessibility has no way to query a window's minimum size up front,
-    /// so callers typically pass a conservative guess on the first pass and
-    /// the size Accessibility actually accepted on a corrective second pass.
+    /// **Deliberately not `SnapGroupMember.frame`.** A member's stored
+    /// `frame` is the *placed* rect — exactly what free-space snapping
+    /// (spec §5) is for: a neighbour dragged into the space another member
+    /// actually leaves lands somewhere other than the plain theoretical
+    /// half/third/quarter. A real regression looked exactly like this: B
+    /// placed into the space A's earlier resize freed (theoretical
+    /// rightHalf 756pt wide, but placed at 700pt to flush against A's own
+    /// 700pt-wide live edge) recorded 700 as its zone; the next drag of B's
+    /// edge then compared that 700 against A's *theoretical* 756 and found
+    /// them 56pt apart — "not touching" — even though the two windows were
+    /// still visibly flush on screen. The theoretical zone never drifts for
+    /// this reason, because it is never a placement's *result*, only a pure
+    /// function of `action` and the screen — computed by the caller, once
+    /// per call, from every member's `action` (which a placement changes,
+    /// a resize never does) and the screen's own geometry.
+    ///
+    /// **The caller must never update a member's `frame` as a result of a
+    /// linked resize — only a fresh placement may**, so that `oldFrame`
+    /// below (always a member's stored `frame`, never a theoretical zone)
+    /// keeps meaning "the last frame this member actually occupied",
+    /// exactly what the plain-move-vs-resize `size` comparison needs it to
+    /// mean — a member placed away from its own theoretical zone by
+    /// free-space snapping must not register a phantom resize the instant
+    /// its next notification arrives. `currentFrames` supplies every
+    /// member's *live* frame, which is what actually gets resized; the
+    /// resized window's own live frame is `newFrame`, not whatever
+    /// `currentFrames` might also hold for it. A member missing from
+    /// `currentFrames` (closed, minimized, or Accessibility just could not
+    /// read it this tick) is skipped rather than guessed at. `minimumSize`
+    /// is asked once per neighbour for the smallest size that neighbour
+    /// will accept — Accessibility has no way to query a window's minimum
+    /// size up front, so callers typically pass a conservative guess on
+    /// the first pass and the size Accessibility actually accepted on a
+    /// corrective second pass.
     static func adjustments(resizedWindowID: CGWindowID,
                             oldFrame: CGRect,
                             newFrame: CGRect,
                             group: SnapGroup,
+                            theoreticalZones: [CGWindowID: CGRect],
                             gap: CGFloat,
                             currentFrames: [CGWindowID: CGRect],
                             minimumSize: (CGWindowID) -> CGSize) -> [Adjustment] {
         guard oldFrame != newFrame,
               oldFrame.size != newFrame.size,
-              let resizedZone = group.members.first(where: { $0.windowID == resizedWindowID })?.frame
+              let resizedZone = theoreticalZones[resizedWindowID]
         else { return [] }
 
         var result: [Adjustment] = []
@@ -163,6 +177,7 @@ enum SnapLinkedResizeSupport {
                                                 resizedZone: resizedZone,
                                                 resizedFrame: resizedFrame,
                                                 group: group,
+                                                theoreticalZones: theoreticalZones,
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
@@ -175,6 +190,7 @@ enum SnapLinkedResizeSupport {
                                                 resizedZone: resizedZone,
                                                 resizedFrame: resizedFrame,
                                                 group: group,
+                                                theoreticalZones: theoreticalZones,
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
@@ -188,6 +204,7 @@ enum SnapLinkedResizeSupport {
                                                 resizedZone: resizedZone,
                                                 resizedFrame: resizedFrame,
                                                 group: group,
+                                                theoreticalZones: theoreticalZones,
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
@@ -200,6 +217,7 @@ enum SnapLinkedResizeSupport {
                                                 resizedZone: resizedZone,
                                                 resizedFrame: resizedFrame,
                                                 group: group,
+                                                theoreticalZones: theoreticalZones,
                                                 gap: gap,
                                                 currentFrames: currentFrames,
                                                 minimumSize: minimumSize,
@@ -228,14 +246,21 @@ enum SnapLinkedResizeSupport {
                                               resizedZone: CGRect,
                                               resizedFrame: CGRect,
                                               group: SnapGroup,
+                                              theoreticalZones: [CGWindowID: CGRect],
                                               gap: CGFloat,
                                               currentFrames: [CGWindowID: CGRect],
                                               minimumSize: (CGWindowID) -> CGSize,
                                               result: inout [Adjustment],
                                               touchedNeighbour: inout Bool) -> CGRect {
+        // A member missing from `theoreticalZones` (the caller could not
+        // resolve a screen for the group, say) is never a neighbour rather
+        // than guessed at, the same rule `currentFrames` already follows.
         let neighbours = group.members
             .filter { $0.windowID != resizedWindowID }
-            .filter { touchingEdges(of: resizedZone, neighbourZone: $0.frame, gap: gap).contains(edge) }
+            .filter { member in
+                guard let neighbourZone = theoreticalZones[member.windowID] else { return false }
+                return touchingEdges(of: resizedZone, neighbourZone: neighbourZone, gap: gap).contains(edge)
+            }
         guard !neighbours.isEmpty else { return resizedFrame }
 
         var clamped: CGFloat = coordinate(of: resizedFrame, edge: edge)

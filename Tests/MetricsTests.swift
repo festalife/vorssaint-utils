@@ -6591,7 +6591,9 @@ struct MetricsTests {
                               width: sgLeftZone.width + 40, height: sgLeftZone.height)
         let slrGrowAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrGrown,
-            group: slrSideGroup, gap: sgGap,
+            group: slrSideGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrSideGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: sgGap,
             currentFrames: [1: slrGrown, 40: sgRightZone], minimumSize: slrNoMinimum)
         expect(slrGrowAdjustments == [.init(windowID: 40,
                                             frame: CGRect(x: sgRightZone.minX + 40, y: sgRightZone.minY,
@@ -6605,7 +6607,9 @@ struct MetricsTests {
                                width: sgLeftZone.width - 30, height: sgLeftZone.height)
         let slrShrinkAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrShrunk,
-            group: slrSideGroup, gap: sgGap,
+            group: slrSideGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrSideGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: sgGap,
             currentFrames: [1: slrShrunk, 40: sgRightZone], minimumSize: slrNoMinimum)
         expect(slrShrinkAdjustments == [.init(windowID: 40,
                                               frame: CGRect(x: sgRightZone.minX - 30, y: sgRightZone.minY,
@@ -6624,7 +6628,9 @@ struct MetricsTests {
                                   width: sgTopZone.width, height: sgTopZone.height + 25)
         let slrGrowDownAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 2, oldFrame: sgTopZone, newFrame: slrGrownDown,
-            group: slrStackedGroup, gap: sgGap,
+            group: slrStackedGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrStackedGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: sgGap,
             currentFrames: [2: slrGrownDown, 41: sgBottomZone], minimumSize: slrNoMinimum)
         expect(slrGrowDownAdjustments == [.init(windowID: 41,
                                                 frame: CGRect(x: sgBottomZone.minX, y: sgBottomZone.minY,
@@ -6645,7 +6651,9 @@ struct MetricsTests {
                                     width: sgBottomRightZone.width + 15, height: sgBottomRightZone.height + 10)
         let slrCornerAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 5, oldFrame: sgBottomRightZone, newFrame: slrCornerGrown,
-            group: slrCornerGroup, gap: sgGap,
+            group: slrCornerGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrCornerGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: sgGap,
             currentFrames: [3: sgBottomLeftZone, 4: sgTopRightZone, 5: slrCornerGrown],
             minimumSize: slrNoMinimum)
         expect(Set(slrCornerAdjustments.map(\.windowID)) == [3, 4],
@@ -6668,7 +6676,9 @@ struct MetricsTests {
                                   width: sgRightZone.width + sgLeftZone.width - 300 + 40, height: sgLeftZone.height)
         let slrClampedAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrOverGrown,
-            group: slrSideGroup, gap: sgGap,
+            group: slrSideGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrSideGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: sgGap,
             currentFrames: [1: slrOverGrown, 40: sgRightZone], minimumSize: slrRightMinimum)
         let slrClampedNeighbour = slrClampedAdjustments.first { $0.windowID == 40 }
         let slrClampedResized = slrClampedAdjustments.first { $0.windowID == 1 }
@@ -6684,7 +6694,9 @@ struct MetricsTests {
         let slrLeftEdgeMoved = CGRect(x: sgLeftZone.minX - 20, y: sgLeftZone.minY,
                                       width: sgLeftZone.width + 20, height: sgLeftZone.height)
         expect(SnapLinkedResizeSupport.adjustments(resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrLeftEdgeMoved,
-                                                    group: slrSideGroup, gap: sgGap,
+                                                    group: slrSideGroup,
+                                                    theoreticalZones: Dictionary(uniqueKeysWithValues: slrSideGroup.members.map { ($0.windowID, $0.frame) }),
+                                                    gap: sgGap,
                                                     currentFrames: [1: slrLeftEdgeMoved, 40: sgRightZone],
                                                     minimumSize: slrNoMinimum).isEmpty,
                "resizing an edge that faces open screen, not a neighbour, produces no adjustments")
@@ -6695,7 +6707,9 @@ struct MetricsTests {
         let slrMoved = CGRect(x: sgLeftZone.minX + 50, y: sgLeftZone.minY + 50,
                               width: sgLeftZone.width, height: sgLeftZone.height)
         expect(SnapLinkedResizeSupport.adjustments(resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrMoved,
-                                                    group: slrSideGroup, gap: sgGap,
+                                                    group: slrSideGroup,
+                                                    theoreticalZones: Dictionary(uniqueKeysWithValues: slrSideGroup.members.map { ($0.windowID, $0.frame) }),
+                                                    gap: sgGap,
                                                     currentFrames: [1: slrMoved, 40: sgRightZone],
                                                     minimumSize: slrNoMinimum).isEmpty,
                "moving a snapped window without resizing it never links its neighbour")
@@ -6709,7 +6723,9 @@ struct MetricsTests {
                                         width: sgLeftZone.width + 10 + 40, height: sgLeftZone.height)
         let slrBothXAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrBothXEdgesMoved,
-            group: slrSideGroup, gap: sgGap,
+            group: slrSideGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrSideGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: sgGap,
             currentFrames: [1: slrBothXEdgesMoved, 40: sgRightZone], minimumSize: slrNoMinimum)
         expect(slrBothXAdjustments == [.init(windowID: 40,
                                              frame: CGRect(x: sgRightZone.minX + 40, y: sgRightZone.minY,
@@ -6726,7 +6742,9 @@ struct MetricsTests {
         let slrHalfGrown = CGRect(x: 0, y: 0, width: 640, height: 600)
         let slrAsymmetricAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 60, oldFrame: slrHalfMember.frame, newFrame: slrHalfGrown,
-            group: slrAsymmetricGroup, gap: 0,
+            group: slrAsymmetricGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrAsymmetricGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: 0,
             currentFrames: [60: slrHalfGrown, 61: slrThirdMember.frame], minimumSize: slrNoMinimum)
         expect(slrAsymmetricAdjustments == [.init(windowID: 61, frame: CGRect(x: 640, y: 0, width: 360, height: 600))],
                "a half growing into a narrower third neighbour shrinks it by exactly the same amount, " +
@@ -6747,7 +6765,9 @@ struct MetricsTests {
         let slrRigidGrown = CGRect(x: 0, y: 0, width: 650, height: 600)
         let slrRigidAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 70, oldFrame: slrRigidResizedFrame, newFrame: slrRigidGrown,
-            group: slrRigidGroup, gap: 0,
+            group: slrRigidGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrRigidGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: 0,
             currentFrames: [70: slrRigidGrown, 71: slrRigidNeighbourFrame], minimumSize: slrRigidMinimum)
         expect(slrRigidAdjustments == [.init(windowID: 70, frame: slrRigidResizedFrame)],
                "a neighbour already at its minimum width gives no ground at all: the resized window is " +
@@ -6785,7 +6805,9 @@ struct MetricsTests {
                 // .frame`, never rewritten by a prior step) — not B's live
                 // frame before this particular step.
                 oldFrame: slrRealZoneB, newFrame: stepNewFrame,
-                group: slrRealGroup, gap: 0,
+                group: slrRealGroup,
+                theoreticalZones: Dictionary(uniqueKeysWithValues: slrRealGroup.members.map { ($0.windowID, $0.frame) }),
+                gap: 0,
                 currentFrames: [12824: slrRealLiveA, 12826: stepNewFrame],
                 minimumSize: slrNoMinimum)
             let expectedA = CGRect(x: 0, y: 0, width: targetMinX, height: 949)
@@ -6805,13 +6827,64 @@ struct MetricsTests {
         let slrRealAResizeAdjustments = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: 12824,
             oldFrame: slrRealZoneA, newFrame: slrRealAExternalResize,
-            group: slrRealGroup, gap: 0,
+            group: slrRealGroup,
+            theoreticalZones: Dictionary(uniqueKeysWithValues: slrRealGroup.members.map { ($0.windowID, $0.frame) }),
+            gap: 0,
             currentFrames: [12824: slrRealAExternalResize, 12826: slrRealBLiveAfterDrag],
             minimumSize: slrNoMinimum)
         expect(slrRealAResizeAdjustments == [.init(windowID: 12826,
                                                     frame: CGRect(x: 850, y: 0, width: 662, height: 949))],
                "resizing A directly afterwards still finds B touching through the same frozen zones, and " +
                "shrinks B's true 914pt-wide live frame down to 662pt — B's stored zone never entered into it")
+
+        // Real-Mac regression at the Phase 2 / Phase 5 seam: B was placed by
+        // free-space snapping (spec §5) into the space A's *earlier* resize
+        // left, so B's stored `frame` (700..1512, flush against A's live
+        // 700pt edge) is the *placed* rect, not the theoretical rightHalf
+        // zone (756..1512) — exactly the case `SnapGroupMember.frame`'s own
+        // contract predicts. Using that placed rect for the touching test
+        // (as opposed to `theoreticalZones`, computed fresh from each
+        // member's `action`) found A's theoretical 756 and B's placed 700
+        // sitting 56pt apart and reported "not touching", even though the
+        // two windows were still visibly flush at 700 on screen.
+        let slrSeamZoneA = CGRect(x: 0, y: 0, width: 756, height: 949)
+        let slrSeamZoneB = CGRect(x: 756, y: 0, width: 756, height: 949)
+        let slrSeamPlacedB = CGRect(x: 700, y: 0, width: 812, height: 949)
+        let slrSeamMemberA = SnapGroupMember(windowID: 101, action: .leftHalf, frame: slrSeamZoneA)
+        let slrSeamMemberB = SnapGroupMember(windowID: 102, action: .rightHalf, frame: slrSeamPlacedB)
+        let slrSeamGroup = SnapGroup(screenID: 1, members: [slrSeamMemberA, slrSeamMemberB])
+        let slrSeamTheoreticalZones: [CGWindowID: CGRect] = [101: slrSeamZoneA, 102: slrSeamZoneB]
+        let slrSeamALiveBeforeDrag = CGRect(x: 0, y: 0, width: 700, height: 949)
+        let slrSeamBDragged = CGRect(x: 598, y: 0, width: 914, height: 949)
+        let slrSeamDragAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 102,
+            oldFrame: slrSeamPlacedB, newFrame: slrSeamBDragged,
+            group: slrSeamGroup,
+            theoreticalZones: slrSeamTheoreticalZones,
+            gap: 0,
+            currentFrames: [101: slrSeamALiveBeforeDrag, 102: slrSeamBDragged],
+            minimumSize: slrNoMinimum)
+        expect(slrSeamDragAdjustments == [.init(windowID: 101, frame: CGRect(x: 0, y: 0, width: 598, height: 949))],
+               "dragging B's left edge still moves A even though B's stored frame (700pt-placed by free " +
+               "space) disagrees with B's theoretical zone (756) — adjacency comes from the theoretical " +
+               "zones, not from B's placed frame")
+
+        // The same free-space-placed B must also still be found touching
+        // when *A* is the one resized next, using B's true live frame
+        // (914pt, from the drag above) as the base for the shrink.
+        let slrSeamAExternalResize = CGRect(x: 0, y: 0, width: 850, height: 949)
+        let slrSeamBLiveAfterDrag = CGRect(x: 598, y: 0, width: 914, height: 949)
+        let slrSeamAResizeAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 101,
+            oldFrame: slrSeamZoneA, newFrame: slrSeamAExternalResize,
+            group: slrSeamGroup,
+            theoreticalZones: slrSeamTheoreticalZones,
+            gap: 0,
+            currentFrames: [101: slrSeamAExternalResize, 102: slrSeamBLiveAfterDrag],
+            minimumSize: slrNoMinimum)
+        expect(slrSeamAResizeAdjustments == [.init(windowID: 102, frame: CGRect(x: 850, y: 0, width: 662, height: 949))],
+               "resizing A afterwards still finds the free-space-placed B touching through the theoretical " +
+               "zones, and shrinks B's true 914pt-wide live frame down to 662pt")
 
         // MARK: Window move and resize gestures
 

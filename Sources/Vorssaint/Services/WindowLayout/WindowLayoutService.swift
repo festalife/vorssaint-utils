@@ -1490,6 +1490,34 @@ final class WindowLayoutService: ObservableObject {
 
     // MARK: - Linked resize of snapped neighbours (spec §6)
 
+    /// Every member of `group`'s *theoretical* zone on `screen` — the
+    /// `WindowLayoutAction`'s own rect (halves/thirds/quarters/sixths math,
+    /// gap included), computed fresh from `member.action` every time,
+    /// never read from `member.frame`. `member.frame` is the *placed*
+    /// rect, which free-space snapping (spec §5) can legitimately differ
+    /// from the theoretical one — a neighbour placed into the space
+    /// another member's earlier resize freed lands somewhere other than
+    /// the plain half/third/quarter — and `SnapLinkedResizeSupport`
+    /// needs the theoretical rect specifically for its adjacency test, so
+    /// two members placed by different paths (one exactly on its
+    /// theoretical zone, one free-space-adjusted) are still correctly
+    /// found touching. `current` is passed as `screen.visibleFrame` for
+    /// every `joinsGroup` action `WindowLayoutGeometry.rect` computes here
+    /// (halves, thirds, quarters, sixths, corners) — none of them read it,
+    /// only actions this function is never asked about (restore, center,
+    /// a display change, ...) do.
+    private func theoreticalZones(for group: SnapGroup, on screen: NSScreen) -> [CGWindowID: CGRect] {
+        var zones: [CGWindowID: CGRect] = [:]
+        for member in group.members {
+            zones[member.windowID] = WindowLayoutGeometry.rect(for: member.action,
+                                                                current: screen.visibleFrame,
+                                                                visibleFrame: screen.visibleFrame,
+                                                                windowGap: WindowLayoutGaps.windowGap,
+                                                                screenGap: WindowLayoutGaps.screenGap)
+        }
+        return zones
+    }
+
     /// Makes the set of watched Accessibility observers match every current
     /// Snap Group member exactly, across every screen — called after every
     /// group mutation (`updateSnapGroup`, `prunedGroup`,
@@ -1743,6 +1771,12 @@ final class WindowLayoutService: ObservableObject {
             hideSnapAssist()
         }
 
+        guard let screen = NSScreen.screens.first(where: { $0.displayID == group.screenID }) else {
+            Self.linkedResizeLog.debug("process \(windowID): could not resolve a screen for this group's displayID")
+            return
+        }
+        let zones = theoreticalZones(for: group, on: screen)
+
         var liveFrames = rawCurrentFrames(for: group)
         liveFrames[windowID] = newFrame
 
@@ -1751,6 +1785,7 @@ final class WindowLayoutService: ObservableObject {
             oldFrame: oldFrame,
             newFrame: newFrame,
             group: group,
+            theoreticalZones: zones,
             gap: WindowLayoutGaps.windowGap,
             currentFrames: liveFrames,
             minimumSize: { _ in Self.linkedResizeMinimumSizeGuess })
@@ -1764,7 +1799,8 @@ final class WindowLayoutService: ObservableObject {
                                      resizedWindowID: windowID,
                                      oldFrame: oldFrame,
                                      newFrame: newFrame,
-                                     group: group)
+                                     group: group,
+                                     theoreticalZones: zones)
     }
 
     /// Writes every adjustment's frame, then, only when a neighbour's actual
@@ -1795,7 +1831,8 @@ final class WindowLayoutService: ObservableObject {
                                               resizedWindowID: CGWindowID,
                                               oldFrame: CGRect,
                                               newFrame: CGRect,
-                                              group: SnapGroup) {
+                                              group: SnapGroup,
+                                              theoreticalZones: [CGWindowID: CGRect]) {
         // One shared deadline for both the first pass below and the
         // corrective pass further down — each member write is already
         // capped individually by `linkedResizeMessagingTimeout`, but this
@@ -1821,6 +1858,7 @@ final class WindowLayoutService: ObservableObject {
             oldFrame: oldFrame,
             newFrame: newFrame,
             group: group,
+            theoreticalZones: theoreticalZones,
             gap: WindowLayoutGaps.windowGap,
             currentFrames: liveFrames,
             minimumSize: { discoveredMinimums[$0] ?? Self.linkedResizeMinimumSizeGuess })
