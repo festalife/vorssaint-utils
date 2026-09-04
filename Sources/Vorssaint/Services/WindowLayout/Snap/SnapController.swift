@@ -818,7 +818,10 @@ final class SnapController {
         zoomHoverPanelOpen = false
         guard wasVisible else { return }
         SnapLog.event("layouts.hide")
-        transition(.layoutsPanelChanged(false))
+        // Only a drag has a phase to tell: the bar is also closed while idle
+        // (a cancelled sequence, the tap stopping), and reporting that as an
+        // ignored event would be noise in the transcript, not information.
+        if case .dragging = machine.phase { transition(.layoutsPanelChanged(false)) }
     }
 
     // MARK: - Snap Layouts on zoom-button hover (spec §3/§12)

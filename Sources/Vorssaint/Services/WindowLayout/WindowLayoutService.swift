@@ -7,7 +7,6 @@ import Carbon.HIToolbox
 import Combine
 import CoreGraphics
 import QuartzCore
-import os.log
 
 enum WindowLayoutError: Equatable {
     case missingAccessibility
