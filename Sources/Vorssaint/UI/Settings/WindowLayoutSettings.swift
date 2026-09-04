@@ -14,7 +14,14 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
     @AppStorage(DefaultsKey.windowSnapLayoutsEnabled) private var snapLayoutsEnabled = true
     @AppStorage(DefaultsKey.windowSnapFillsFreeSpace) private var snapFillsFreeSpace = true
-    @AppStorage(DefaultsKey.windowSnapAssistEnabled) private var snapAssistEnabled = true
+    // `@AppStorage`'s default is only ever consulted when the key itself was
+    // never written, so this mirrors `SnapAssistSupport.Mode.resolved`
+    // exactly: nobody who already turned Snap Assist off is shown "Ask" the
+    // first time they open this page after updating.
+    @AppStorage(DefaultsKey.windowSnapAssistMode)
+    private var snapAssistModeRaw = UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapAssistEnabled)
+        ? SnapAssistSupport.Mode.ask.rawValue
+        : SnapAssistSupport.Mode.off.rawValue
     @AppStorage(DefaultsKey.windowSnapLinkedResizeEnabled) private var snapLinkedResizeEnabled = true
     @AppStorage(DefaultsKey.windowGestureEnabled) private var gestureEnabled = false
     @AppStorage(DefaultsKey.windowGestureModifiers) private var gestureModifiers = WindowGestureSupport.defaultModifierStorageValue
@@ -107,11 +114,16 @@ struct WindowLayoutSettings: View {
                 // either: Snap Assist never starts or stops a tap of its
                 // own, it only decides whether the next successful
                 // placement opens a panel.
-                Toggle(text.snapAssistEnable, isOn: $snapAssistEnabled)
-                Text(text.snapAssistCaption)
+                Picker(text.snapAssistModeTitle, selection: $snapAssistModeRaw) {
+                    Text(text.snapAssistModeAsk).tag(SnapAssistSupport.Mode.ask.rawValue)
+                    Text(text.snapAssistModeAuto).tag(SnapAssistSupport.Mode.auto.rawValue)
+                    Text(text.snapAssistModeOff).tag(SnapAssistSupport.Mode.off.rawValue)
+                }
+                .pickerStyle(.menu)
+                Text(text.snapAssistModeCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if snapAssistEnabled, !permissions.screenRecording {
+                if snapAssistModeRaw != SnapAssistSupport.Mode.off.rawValue, !permissions.screenRecording {
                     PermissionRow(kind: .screenRecording)
                 }
                 Divider()

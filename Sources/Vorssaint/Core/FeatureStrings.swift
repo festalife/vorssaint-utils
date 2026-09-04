@@ -264,7 +264,12 @@ extension WindowLayoutFeatureStrings {
         gapSmall: "작게",
         gapMedium: "중간",
         gapLarge: "크게",
-        gapExtraLarge: "아주 크게"
+        gapExtraLarge: "아주 크게",
+        snapAssistModeTitle: "창을 놓아 빈 공간이 생기면",
+        snapAssistModeCaption: "묻기는 채울 창을 직접 고르게 하고, 자동은 가장 최근에 사용한 창으로 바로 채우며, 끄기는 아무 것도 하지 않습니다.",
+        snapAssistModeAsk: "묻기(오버레이 표시)",
+        snapAssistModeAuto: "자동(즉시 채우기)",
+        snapAssistModeOff: "끄기"
     )
 }
 
@@ -1240,6 +1245,11 @@ struct WindowLayoutFeatureStrings {
     let gapMedium: String
     let gapLarge: String
     let gapExtraLarge: String
+    let snapAssistModeTitle: String
+    let snapAssistModeCaption: String
+    let snapAssistModeAsk: String
+    let snapAssistModeAuto: String
+    let snapAssistModeOff: String
 
     static let enUS = WindowLayoutFeatureStrings(
         title: "Window layout",
@@ -1317,7 +1327,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Small",
         gapMedium: "Medium",
         gapLarge: "Large",
-        gapExtraLarge: "Extra large"
+        gapExtraLarge: "Extra large",
+        snapAssistModeTitle: "When a window leaves free space",
+        snapAssistModeCaption: "Ask lets you pick another window to fill it; Auto fills it immediately with the most recently used window; Off does nothing.",
+        snapAssistModeAsk: "Ask (show overlay)",
+        snapAssistModeAuto: "Auto (fill immediately)",
+        snapAssistModeOff: "Off"
     )
 
     static let ptBR = WindowLayoutFeatureStrings(
@@ -1396,7 +1411,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Pequeno",
         gapMedium: "Médio",
         gapLarge: "Grande",
-        gapExtraLarge: "Extragrande"
+        gapExtraLarge: "Extragrande",
+        snapAssistModeTitle: "Quando uma janela deixa espaço livre",
+        snapAssistModeCaption: "Perguntar permite escolher outra janela para preenchê-lo; Automático preenche imediatamente com a janela usada mais recentemente; Desativado não faz nada.",
+        snapAssistModeAsk: "Perguntar (mostrar sobreposição)",
+        snapAssistModeAuto: "Automático (preencher imediatamente)",
+        snapAssistModeOff: "Desativado"
     )
 
     static let tr = WindowLayoutFeatureStrings(
@@ -1475,7 +1495,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Küçük",
         gapMedium: "Orta",
         gapLarge: "Büyük",
-        gapExtraLarge: "Çok büyük"
+        gapExtraLarge: "Çok büyük",
+        snapAssistModeTitle: "Bir pencere boş alan bıraktığında",
+        snapAssistModeCaption: "Sor, doldurmak için başka bir pencere seçmenizi sağlar; Otomatik, en son kullanılan pencereyle hemen doldurur; Kapalı hiçbir şey yapmaz.",
+        snapAssistModeAsk: "Sor (yer paylaşımını göster)",
+        snapAssistModeAuto: "Otomatik (hemen doldur)",
+        snapAssistModeOff: "Kapalı"
     )
 
     static let ru = WindowLayoutFeatureStrings(
@@ -1554,7 +1579,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Маленький",
         gapMedium: "Средний",
         gapLarge: "Большой",
-        gapExtraLarge: "Очень большой"
+        gapExtraLarge: "Очень большой",
+        snapAssistModeTitle: "Когда окно оставляет свободное место",
+        snapAssistModeCaption: "«Спросить» позволяет выбрать другое окно для заполнения; «Автоматически» сразу заполняет его последним использованным окном; «Выключено» ничего не делает.",
+        snapAssistModeAsk: "Спросить (показать оверлей)",
+        snapAssistModeAuto: "Автоматически (заполнить сразу)",
+        snapAssistModeOff: "Выключено"
     )
 
     static let es = WindowLayoutFeatureStrings(
@@ -1633,7 +1663,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Pequeño",
         gapMedium: "Mediano",
         gapLarge: "Grande",
-        gapExtraLarge: "Extragrande"
+        gapExtraLarge: "Extragrande",
+        snapAssistModeTitle: "Cuando una ventana deja espacio libre",
+        snapAssistModeCaption: "Preguntar te deja elegir otra ventana para llenarlo; Automático lo llena de inmediato con la ventana usada más recientemente; Desactivado no hace nada.",
+        snapAssistModeAsk: "Preguntar (mostrar superposición)",
+        snapAssistModeAuto: "Automático (llenar de inmediato)",
+        snapAssistModeOff: "Desactivado"
     )
 
     static let de = WindowLayoutFeatureStrings(
@@ -1712,7 +1747,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Klein",
         gapMedium: "Mittel",
         gapLarge: "Groß",
-        gapExtraLarge: "Sehr groß"
+        gapExtraLarge: "Sehr groß",
+        snapAssistModeTitle: "Wenn ein Fenster freien Platz hinterlässt",
+        snapAssistModeCaption: "„Fragen“ lässt dich ein anderes Fenster zum Auffüllen wählen; „Automatisch“ füllt ihn sofort mit dem zuletzt verwendeten Fenster; „Aus“ tut nichts.",
+        snapAssistModeAsk: "Fragen (Overlay anzeigen)",
+        snapAssistModeAuto: "Automatisch (sofort füllen)",
+        snapAssistModeOff: "Aus"
     )
 
     static let fr = WindowLayoutFeatureStrings(
@@ -1791,7 +1831,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Petit",
         gapMedium: "Moyen",
         gapLarge: "Grand",
-        gapExtraLarge: "Très grand"
+        gapExtraLarge: "Très grand",
+        snapAssistModeTitle: "Quand une fenêtre laisse de l’espace libre",
+        snapAssistModeCaption: "« Demander » vous laisse choisir une autre fenêtre pour le remplir ; « Automatique » le remplit aussitôt avec la fenêtre la plus récemment utilisée ; « Désactivé » ne fait rien.",
+        snapAssistModeAsk: "Demander (afficher la superposition)",
+        snapAssistModeAuto: "Automatique (remplir aussitôt)",
+        snapAssistModeOff: "Désactivé"
     )
 
     static let it = WindowLayoutFeatureStrings(
@@ -1870,7 +1915,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "Piccolo",
         gapMedium: "Medio",
         gapLarge: "Grande",
-        gapExtraLarge: "Molto grande"
+        gapExtraLarge: "Molto grande",
+        snapAssistModeTitle: "Quando una finestra lascia spazio libero",
+        snapAssistModeCaption: "Chiedi ti lascia scegliere un'altra finestra per riempirlo; Automatico lo riempie subito con la finestra usata più di recente; Disattivato non fa nulla.",
+        snapAssistModeAsk: "Chiedi (mostra la sovrapposizione)",
+        snapAssistModeAuto: "Automatico (riempi subito)",
+        snapAssistModeOff: "Disattivato"
     )
 
     static let ja = WindowLayoutFeatureStrings(
@@ -1949,7 +1999,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "小",
         gapMedium: "中",
         gapLarge: "大",
-        gapExtraLarge: "特大"
+        gapExtraLarge: "特大",
+        snapAssistModeTitle: "ウィンドウが空きスペースを残したとき",
+        snapAssistModeCaption: "「確認」は埋めるウィンドウを自分で選べます。「自動」は直近に使ったウィンドウですぐに埋めます。「オフ」は何もしません。",
+        snapAssistModeAsk: "確認する（オーバーレイを表示）",
+        snapAssistModeAuto: "自動（すぐに埋める）",
+        snapAssistModeOff: "オフ"
     )
 
     static let zhHans = WindowLayoutFeatureStrings(
@@ -2028,7 +2083,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "小",
         gapMedium: "中",
         gapLarge: "大",
-        gapExtraLarge: "特大"
+        gapExtraLarge: "特大",
+        snapAssistModeTitle: "当窗口留出空白区域时",
+        snapAssistModeCaption: "“询问”可让你自行选择要填充的窗口；“自动”会立即用最近使用的窗口填充；“关闭”则不做任何操作。",
+        snapAssistModeAsk: "询问（显示叠加层）",
+        snapAssistModeAuto: "自动（立即填充）",
+        snapAssistModeOff: "关闭"
     )
 
     static let zhTW = WindowLayoutFeatureStrings(
@@ -2107,7 +2167,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "小",
         gapMedium: "中",
         gapLarge: "大",
-        gapExtraLarge: "特大"
+        gapExtraLarge: "特大",
+        snapAssistModeTitle: "當視窗留下空白區域時",
+        snapAssistModeCaption: "「詢問」可讓你自行選擇要填入的視窗；「自動」會立即用最近使用的視窗填入；「關閉」則不執行任何動作。",
+        snapAssistModeAsk: "詢問（顯示疊加層）",
+        snapAssistModeAuto: "自動（立即填入）",
+        snapAssistModeOff: "關閉"
     )
 
     static let zhHK = WindowLayoutFeatureStrings(
@@ -2186,7 +2251,12 @@ struct WindowLayoutFeatureStrings {
         gapSmall: "小",
         gapMedium: "中",
         gapLarge: "大",
-        gapExtraLarge: "特大"
+        gapExtraLarge: "特大",
+        snapAssistModeTitle: "當視窗留下空白區域時",
+        snapAssistModeCaption: "「詢問」可讓你自行選擇要填入嘅視窗；「自動」會即時用最近使用嘅視窗填入；「關閉」就唔會做任何動作。",
+        snapAssistModeAsk: "詢問（顯示疊加層）",
+        snapAssistModeAuto: "自動（即時填入）",
+        snapAssistModeOff: "關閉"
     )
 }
 

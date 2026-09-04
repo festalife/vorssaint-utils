@@ -958,6 +958,25 @@ final class WindowLayoutService: ObservableObject {
     /// same Accessibility/session gates every other Window Layout surface
     /// checks before touching AX or opening a panel.
     private var snapAssistEnabled: Bool {
+        snapAssistMode != .off && snapAssistGatesPass
+    }
+
+    /// Phase 4's mode (spec §4's automatic-fill option): `.ask` opens the
+    /// overlay exactly as before, `.auto` fills the first free cell
+    /// immediately, `.off` matches the feature disabled entirely. See
+    /// `SnapAssistSupport.Mode.resolved` for the migration from the legacy
+    /// bool key.
+    private var snapAssistMode: SnapAssistSupport.Mode {
+        UserDefaults.standard.synchronize()
+        let stored = UserDefaults.standard.string(forKey: DefaultsKey.windowSnapAssistMode)
+        let legacy = UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapAssistEnabled)
+        return SnapAssistSupport.Mode.resolved(storedRawValue: stored, legacyEnabled: legacy)
+    }
+
+    /// The same Accessibility/session gates every other Window Layout
+    /// surface checks before touching AX or opening a panel, independent of
+    /// the mode toggle itself.
+    private var snapAssistGatesPass: Bool {
         // `synchronize()` is deprecated, but still the one reliable nudge
         // to fold in a value another process just wrote (`defaults write`,
         // used to flip this key live during testing without a relaunch):
@@ -968,9 +987,7 @@ final class WindowLayoutService: ObservableObject {
         // partial-zone placement lands, so the cost of asking is bounded to
         // exactly the moments it can matter.
         UserDefaults.standard.synchronize()
-        return AppFeature.windowLayout.isAvailable
-            && UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapAssistEnabled)
-            && AXIsProcessTrusted()
+        return AppFeature.windowLayout.isAvailable && AXIsProcessTrusted()
     }
 
     /// Reacts to `action` just placing `windowID` successfully (spec §4):
@@ -1054,6 +1071,18 @@ final class WindowLayoutService: ObservableObject {
             hideSnapAssist()
             return
         }
+
+        // Phase 4 (spec §4's automatic option): fill the first free cell
+        // right away with no overlay and no session — the recursive
+        // `handleSnapAssist(fromSnapAssist: true)` this triggers finds
+        // `snapAssistSession` still `nil` and stops there on its own,
+        // which is exactly spec §11's "for quarters fill only the first
+        // free cell" (never chains through the rest of the layout).
+        guard snapAssistMode == .ask else {
+            autoFillCell(cell, windowID: windowID, screen: screen,
+                        visibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
+            return
+        }
         snapAssistSession = session
         presentCell(cell, action: action, windowID: windowID, screen: screen,
                    visibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
@@ -1101,6 +1130,39 @@ final class WindowLayoutService: ObservableObject {
             }
         }
         return occupied
+    }
+
+    /// Phase 4's automatic option: places the most recently used offerable
+    /// candidate straight into `cell`, with no overlay and no session —
+    /// `presentCell`'s sibling for `.auto` mode, sharing its exact
+    /// candidate/free-space computation so the window it picks is the same
+    /// one `.ask` mode would have shown first. Does nothing (silently) when
+    /// there is no candidate or the free space is not worth filling, same
+    /// as `presentCell`'s own bailouts.
+    private func autoFillCell(_ cell: WindowLayoutAction,
+                              windowID: CGWindowID,
+                              screen: NSScreen,
+                              visibleFrame: NSRect,
+                              fallbackFrame: WindowLayoutFrame) {
+        var excluded: Set<CGWindowID> = [windowID]
+        let group = prunedGroup(snapGroups[screen.displayID] ?? SnapGroup(screenID: screen.displayID), on: screen)
+        excluded.formUnion(group.members.map(\.windowID))
+
+        let items = snapAssistCandidates(on: screen, excluding: excluded)
+        guard let candidate = items.first, let candidateWindowID = candidate.windowID else { return }
+
+        let theoreticalZone = WindowLayoutGeometry.rect(for: cell,
+                                                        current: visibleFrame,
+                                                        visibleFrame: visibleFrame,
+                                                        windowGap: WindowLayoutGaps.windowGap,
+                                                        screenGap: WindowLayoutGaps.screenGap)
+        let freeRect = freeSpaceAdjusted(for: cell,
+                                         theoreticalZone: theoreticalZone,
+                                         visibleFrame: visibleFrame,
+                                         fallbackFrame: fallbackFrame,
+                                         excluding: nil)
+        guard SnapAssistSupport.isOfferable(freeRect: freeRect) else { return }
+        applySnapAssistPlacement(cell, windowID: candidateWindowID, pid: candidate.windowOwnerPID, screen: screen)
     }
 
     /// Builds the candidate list and free-space rect for `cell` and either

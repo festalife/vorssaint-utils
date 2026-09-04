@@ -586,6 +586,10 @@ enum DefaultsKey {
     static let windowSnapLayoutsEnabled = "windowSnapLayoutsEnabled"
     static let windowSnapFillsFreeSpace = "windowSnapFillsFreeSpace"
     static let windowSnapAssistEnabled = "windowSnapAssistEnabled"
+    // Phase 4: "ask" (overlay, today's behavior)/"auto" (fill immediately)/
+    // "off" — see `SnapAssistSupport.Mode`. Absent (never written) falls
+    // back to `windowSnapAssistEnabled` for anyone who already set that.
+    static let windowSnapAssistMode = "windowSnapAssistMode"
     static let windowSnapLinkedResizeEnabled = "windowSnapLinkedResizeEnabled"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"

@@ -6571,6 +6571,18 @@ struct MetricsTests {
         expect(SnapAssistSupport.contentSize(count: 0, columns: 2, itemSize: CGSize(width: 100, height: 80),
                                              spacing: 10, padding: 16) == .zero,
                "no items means no content size")
+
+        // Phase 4: mode migration from the legacy `windowSnapAssistEnabled` bool.
+        expect(SnapAssistSupport.Mode.resolved(storedRawValue: "auto", legacyEnabled: true) == .auto,
+               "an explicit stored mode always wins, regardless of the legacy bool")
+        expect(SnapAssistSupport.Mode.resolved(storedRawValue: "off", legacyEnabled: true) == .off,
+               "an explicit stored mode wins even when it disagrees with the legacy bool")
+        expect(SnapAssistSupport.Mode.resolved(storedRawValue: nil, legacyEnabled: true) == .ask,
+               "no stored mode yet: the legacy bool's on maps to today's overlay behavior")
+        expect(SnapAssistSupport.Mode.resolved(storedRawValue: nil, legacyEnabled: false) == .off,
+               "no stored mode yet: the legacy bool's off maps to off, not silently to ask")
+        expect(SnapAssistSupport.Mode.resolved(storedRawValue: "not-a-real-mode", legacyEnabled: false) == .off,
+               "a garbage stored value is treated the same as no stored value at all")
         // MARK: Snap Linked Resize
 
         // A generous default: these fixtures care about the *shape* of the

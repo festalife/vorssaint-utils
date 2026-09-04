@@ -10,6 +10,31 @@ import CoreGraphics
 /// caller that touches Accessibility or a panel, so every decision below is
 /// exercised directly by `build.sh --test`.
 enum SnapAssistSupport {
+    /// Phase 4 (spec §4's automatic-fill option): how a successful
+    /// partial-zone placement should react to the free space it leaves
+    /// behind. `.ask` is today's overlay; `.auto` fills the first free cell
+    /// immediately, no overlay, using the same candidate ordering the
+    /// overlay would have offered first; `.off` does nothing, matching the
+    /// feature disabled entirely.
+    enum Mode: String {
+        case ask
+        case auto
+        case off
+
+        /// `windowSnapAssistMode`'s raw value, falling back to the legacy
+        /// `windowSnapAssistEnabled` bool when the new key has never been
+        /// written — the migration path for anyone who already has an
+        /// opinion recorded under the old key. A person who turned Snap
+        /// Assist off keeps seeing it off; everyone else (including nobody
+        /// having touched either key) keeps seeing today's overlay.
+        static func resolved(storedRawValue: String?, legacyEnabled: Bool) -> Mode {
+            if let storedRawValue, let mode = Mode(rawValue: storedRawValue) {
+                return mode
+            }
+            return legacyEnabled ? .ask : .off
+        }
+    }
+
     /// Below this size per axis, spec §9's rule for an oversized minimum
     /// window applies just as much here: a free zone this small is not
     /// worth covering with an overlay at all — nobody can usefully read a
