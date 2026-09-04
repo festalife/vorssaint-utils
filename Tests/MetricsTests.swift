@@ -6886,6 +6886,31 @@ struct MetricsTests {
                "resizing A afterwards still finds the free-space-placed B touching through the theoretical " +
                "zones, and shrinks B's true 914pt-wide live frame down to 662pt")
 
+        // Both directions, on the same free-space-placed seam: this time A
+        // (never free-space-adjusted itself) is the one grabbed, growing
+        // its *right* edge into B — the mirror of every test above, which
+        // only ever dragged B's own edge. B is a member missing from
+        // `theoreticalZones`' underlying story in exactly the same way a
+        // Snap Assist pick is: its stored `frame` is a placed rect that
+        // came from *some* placement path other than the plain theoretical
+        // half — a real drag's free-space landing here, a Snap Assist card
+        // click in production — and `SnapLinkedResizeSupport` cannot tell
+        // the two apart, nor does it need to: both simply set `action`
+        // (unchanged by which path chose it) and a placed `frame` on the
+        // member, exactly what `theoreticalZones` reads only the first of.
+        let slrSeamAGrown = CGRect(x: 0, y: 0, width: 900, height: 949)
+        let slrSeamAGrowAdjustments = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 101,
+            oldFrame: slrSeamZoneA, newFrame: slrSeamAGrown,
+            group: slrSeamGroup,
+            theoreticalZones: slrSeamTheoreticalZones,
+            gap: 0,
+            currentFrames: [101: slrSeamAGrown, 102: slrSeamPlacedB],
+            minimumSize: slrNoMinimum)
+        expect(slrSeamAGrowAdjustments == [.init(windowID: 102, frame: CGRect(x: 900, y: 0, width: 612, height: 949))],
+               "grabbing A's own edge (not B's) still finds the free-space-placed B touching through the " +
+               "theoretical zones, and shrinks B's true 812pt-wide live frame down to 612pt")
+
         // MARK: Window move and resize gestures
 
         expect(WindowGestureSupport.modifiers(from: nil) == [.control, .command],

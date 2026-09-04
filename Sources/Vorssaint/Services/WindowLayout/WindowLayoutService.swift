@@ -88,33 +88,50 @@ final class WindowLayoutService: ObservableObject {
     /// invalidate on a reconfiguration (`AppKitExtensions.swift` explains
     /// the same choice for `isStillAttached`).
     private var snapGroups: [CGDirectDisplayID: SnapGroup] = [:]
-    /// One Accessibility observer per Snap Group member currently being
-    /// watched for a linked resize (spec §6), kept in lockstep with
-    /// `snapGroups`' combined membership by `syncLinkedResizeObservers()`
-    /// every time a group is created, updated or pruned. Empty whenever
+    /// Every Snap Group member currently being watched for a linked resize
+    /// (spec §6) — one entry per window, kept in lockstep with `snapGroups`'
+    /// combined membership by `syncLinkedResizeObservers()` every time a
+    /// group is created, updated or pruned. Empty whenever
     /// `windowSnapLinkedResizeEnabled` is off, matching how every other tap
     /// in this service only touches Accessibility once a feature is on.
+    /// The actual `AXObserver` each member's notifications flow through is
+    /// not stored here — it is shared per *process* in
+    /// `linkedResizeAppObservers` below, since several members can belong
+    /// to the same app (several Chrome windows tiled together, say).
     private var linkedResizeObservers: [CGWindowID: LinkedResizeObservation] = [:]
     private struct LinkedResizeObservation {
-        let observer: AXObserver
         let window: AXUIElement
-        /// The application element the same `observer` is also registered
-        /// against, kept only to remove that registration later —
-        /// `kAXWindowResizedNotification`/`kAXWindowMovedNotification` (spec
-        /// says "at the end of the window move/resize") are, per Apple's
-        /// own header comments, the pair standard AppKit windows (TextEdit
-        /// included) actually post reliably; `kAXResizedNotification`/
-        /// `kAXMovedNotification` on the window element itself are also
-        /// registered below since a few apps do use them, but on their own
-        /// they never fired for an ordinary Cocoa window in testing — this
-        /// was the reason linked resize never reacted to a real drag at
-        /// all.
-        let app: AXUIElement
         /// Recorded so a notification, and every later read, can be
         /// rejected the moment it turns out to belong to a different
         /// process — `CGWindowID` values are reused by the window server,
         /// so the id alone is not proof this is still the same window.
         let pid: pid_t
+    }
+    /// One shared `AXObserver` per *process*, not per window: an app with
+    /// several watched windows (Chrome with three tiled tabs' windows, say)
+    /// registered a fresh `AXObserver` — and a fresh
+    /// `kAXWindowResizedNotification`/`kAXWindowMovedNotification`
+    /// registration on the very same application element — per window
+    /// before this, which is both wasteful and, worse, meant every one of
+    /// those observers received every one of that app's window move/resize
+    /// notifications, not just the one for its own window. One observer per
+    /// pid, created the moment its first window starts being watched and
+    /// torn down the moment its last one stops, with the app-level
+    /// registration made exactly once. Per-window `kAXResizedNotification`
+    /// /`kAXMovedNotification` are still registered on this same shared
+    /// observer, once per window element, alongside it — `AXObserver`
+    /// supports watching any number of elements and notifications at once,
+    /// there was never a need for more than one per process.
+    private var linkedResizeAppObservers: [pid_t: LinkedResizeAppObservation] = [:]
+    private struct LinkedResizeAppObservation {
+        let observer: AXObserver
+        let app: AXUIElement
+        /// Every window of this process currently watched under `observer`
+        /// — consulted to resolve an app-level notification's `element` to
+        /// one of *our* windowIDs (`resolveLinkedResizeWindowID`) and to
+        /// know when the last one leaving means the whole observation
+        /// should be torn down rather than just one window's registration.
+        var watchedWindows: Set<CGWindowID> = []
     }
     /// The exact frame this service last wrote to a window itself, and
     /// when — so the resize/move notification that write provokes can be
@@ -149,19 +166,30 @@ final class WindowLayoutService: ObservableObject {
     /// second pass using whatever size Accessibility actually accepted,
     /// whenever that turns out to be larger.
     private static let linkedResizeMinimumSizeGuess = CGSize(width: 80, height: 80)
-    /// A short per-element Accessibility messaging timeout used only for
+    /// A per-element Accessibility messaging timeout used only for
     /// linked-resize member windows — a fan-out of synchronous writes across
     /// up to four members, each capable of blocking on the system default
     /// (multiple seconds) if that member's app has hung, could otherwise
-    /// freeze the whole app for the duration of one throttled tick.
-    private static let linkedResizeMessagingTimeout: Float = 0.1
+    /// freeze the whole app for the duration of one throttled tick. 0.1s
+    /// (the original value) turned out too tight for a real read or write
+    /// against Chromium/Electron apps and Finder under ordinary load —
+    /// every AX round trip to those was timing out, silently, well before
+    /// they had actually failed to respond, which read exactly like "this
+    /// member never resizes" from the outside. 0.25s is still short enough
+    /// to bound a single hung app's cost to a fraction of one throttled
+    /// tick, but long enough that a healthy Chromium/Electron/Finder window
+    /// answers well within it.
+    private static let linkedResizeMessagingTimeout: Float = 0.25
     /// Hard ceiling on how long one throttled pass may spend writing member
     /// frames, across both the first pass and the corrective pass —
     /// bounds the worst case where several members are all slow at once
     /// (each capped at `linkedResizeMessagingTimeout`) instead of letting
     /// them add up unbounded. Remaining members are simply left alone for
-    /// this tick; the next notification tries again.
-    private static let linkedResizeApplyBudget: TimeInterval = 0.2
+    /// this tick; the next notification tries again. Sized for up to four
+    /// members each legitimately taking close to `linkedResizeMessagingTimeout`
+    /// (Chromium/Electron under load, say) without the budget cutting a
+    /// perfectly healthy pass short partway through.
+    private static let linkedResizeApplyBudget: TimeInterval = 0.6
     /// Diagnostics for the whole linked-resize path — observer registration,
     /// every notification received, every early return and its reason, and
     /// every write attempt with its frame and `AXError`. `.debug` level
@@ -1542,119 +1570,194 @@ final class WindowLayoutService: ObservableObject {
         for windowID in toStart { startWatchingLinkedResize(windowID) }
     }
 
+    /// A short, human-readable tag for a process — bundle id when
+    /// available, else the raw pid — spliced into every linked-resize log
+    /// line so "which app" is legible at a glance in a `log stream` across
+    /// several apps at once, instead of having to cross-reference a bare
+    /// pid.
+    private func appLabel(for pid: pid_t) -> String {
+        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "pid \(pid)"
+    }
+
     private func startWatchingLinkedResize(_ windowID: CGWindowID) {
         guard let pid = ownerPID(for: windowID) else {
             Self.linkedResizeLog.debug("startWatching \(windowID): no owner pid found via CGWindowList")
             return
         }
-        let axApp = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(axApp, 0.35)
-        guard let axWindow = axElement(windowID: windowID, in: axApp) else {
-            Self.linkedResizeLog.debug("startWatching \(windowID) pid \(pid): no matching AX window element")
+        let label = appLabel(for: pid)
+
+        // One `AXObserver` — and one app-level notification registration —
+        // per process, reused across every window of that process already
+        // being watched (an app with several tiled windows, Chrome say,
+        // must never end up with N observers all receiving every one of
+        // that app's N windows' notifications).
+        let appObservation: LinkedResizeAppObservation
+        if let existing = linkedResizeAppObservers[pid] {
+            appObservation = existing
+        } else {
+            let axApp = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(axApp, Self.linkedResizeMessagingTimeout)
+            var observerRef: AXObserver?
+            let createError = AXObserverCreate(pid, windowLayoutLinkedResizeAXCallback, &observerRef)
+            guard createError == .success, let observer = observerRef else {
+                Self.linkedResizeLog.debug("""
+                    startWatching \(windowID) \(label, privacy: .public): AXObserverCreate failed \
+                    (\(String(describing: createError), privacy: .public))
+                    """)
+                return
+            }
+            let refcon = Unmanaged.passUnretained(self).toOpaque()
+            // Registered on the *application* element, once per process:
+            // per Apple's own header comments these are posted "at the end
+            // of the window move/resize" with the resized/moved window as
+            // the notification's element — this is the pair standard
+            // AppKit windows actually post, and the one that matters for a
+            // real drag or an external AX write to be noticed at all.
+            let windowResizedError = AXObserverAddNotification(observer, axApp,
+                                                                kAXWindowResizedNotification as CFString, refcon)
+            let windowMovedError = AXObserverAddNotification(observer, axApp,
+                                                              kAXWindowMovedNotification as CFString, refcon)
+            Self.linkedResizeLog.debug("""
+                startWatching \(label, privacy: .public): app-level \
+                AXWindowResized=\(String(describing: windowResizedError), privacy: .public) \
+                AXWindowMoved=\(String(describing: windowMovedError), privacy: .public)
+                """)
+            guard windowResizedError == .success || windowMovedError == .success else {
+                Self.linkedResizeLog.debug("startWatching \(label, privacy: .public): app-level registration failed entirely, not watching")
+                return
+            }
+            CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+            let created = LinkedResizeAppObservation(observer: observer, app: axApp)
+            linkedResizeAppObservers[pid] = created
+            appObservation = created
+        }
+
+        guard let axWindow = axElement(windowID: windowID, in: appObservation.app) else {
+            Self.linkedResizeLog.debug("startWatching \(windowID) \(label, privacy: .public): no matching AX window element")
+            stopAppObservationIfUnused(pid: pid)
             return
         }
         // Every subsequent write/read through this specific element — every
         // one `writeLinkedResizeFrame` and `processLinkedResize` make — is
-        // bounded by this short timeout, not the system default, which is
-        // what keeps one hung member's app from stalling the main thread.
+        // bounded by this timeout, not the system default, which is what
+        // keeps one hung member's app from stalling the main thread.
         AXUIElementSetMessagingTimeout(axWindow, Self.linkedResizeMessagingTimeout)
-
-        var observerRef: AXObserver?
-        let createError = AXObserverCreate(pid, windowLayoutLinkedResizeAXCallback, &observerRef)
-        guard createError == .success, let observer = observerRef else {
-            Self.linkedResizeLog.debug("""
-                startWatching \(windowID) pid \(pid): AXObserverCreate failed \
-                (\(String(describing: createError), privacy: .public))
-                """)
-            return
-        }
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         // Registered on the window element: some apps do post these for
         // geometry changes, but an ordinary Cocoa window (TextEdit
-        // included) generally does not — kept as a defensive extra, not
-        // the primary signal.
-        let resizedError = AXObserverAddNotification(observer, axWindow, kAXResizedNotification as CFString, refcon)
-        let movedError = AXObserverAddNotification(observer, axWindow, kAXMovedNotification as CFString, refcon)
-        // Registered on the *application* element: per Apple's own header
-        // comments these are posted "at the end of the window move/resize"
-        // with the resized/moved window as the notification's element —
-        // this is the pair standard AppKit windows actually post, and the
-        // one that matters for a real drag or an external AX write to be
-        // noticed at all.
-        let windowResizedError = AXObserverAddNotification(observer, axApp,
-                                                            kAXWindowResizedNotification as CFString, refcon)
-        let windowMovedError = AXObserverAddNotification(observer, axApp,
-                                                          kAXWindowMovedNotification as CFString, refcon)
+        // included) generally does not — kept as a defensive extra
+        // alongside the app-level pair above, not the primary signal.
+        let resizedError = AXObserverAddNotification(appObservation.observer, axWindow,
+                                                      kAXResizedNotification as CFString, refcon)
+        let movedError = AXObserverAddNotification(appObservation.observer, axWindow,
+                                                    kAXMovedNotification as CFString, refcon)
         Self.linkedResizeLog.debug("""
-            startWatching \(windowID) pid \(pid): \
+            startWatching \(windowID) \(label, privacy: .public): window-level \
             AXResized=\(String(describing: resizedError), privacy: .public) \
-            AXMoved=\(String(describing: movedError), privacy: .public) \
-            AXWindowResized=\(String(describing: windowResizedError), privacy: .public) \
-            AXWindowMoved=\(String(describing: windowMovedError), privacy: .public)
+            AXMoved=\(String(describing: movedError), privacy: .public)
             """)
-        guard resizedError == .success || movedError == .success
-                || windowResizedError == .success || windowMovedError == .success
-        else {
-            Self.linkedResizeLog.debug("startWatching \(windowID) pid \(pid): every AXObserverAddNotification failed, not watching")
-            return
-        }
 
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
-        linkedResizeObservers[windowID] = LinkedResizeObservation(observer: observer, window: axWindow, app: axApp, pid: pid)
-        Self.linkedResizeLog.debug("startWatching \(windowID) pid \(pid): observer registered, run-loop source added to main/.commonModes")
+        linkedResizeObservers[windowID] = LinkedResizeObservation(window: axWindow, pid: pid)
+        linkedResizeAppObservers[pid]?.watchedWindows.insert(windowID)
+        Self.linkedResizeLog.debug("startWatching \(windowID) \(label, privacy: .public): now watching (shared app observer)")
     }
 
     private func stopWatchingLinkedResize(_ windowID: CGWindowID) {
         guard let observation = linkedResizeObservers.removeValue(forKey: windowID) else { return }
-        Self.linkedResizeLog.debug("stopWatching \(windowID) pid \(observation.pid)")
-        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observation.observer), .commonModes)
-        AXObserverRemoveNotification(observation.observer, observation.window, kAXResizedNotification as CFString)
-        AXObserverRemoveNotification(observation.observer, observation.window, kAXMovedNotification as CFString)
-        AXObserverRemoveNotification(observation.observer, observation.app, kAXWindowResizedNotification as CFString)
-        AXObserverRemoveNotification(observation.observer, observation.app, kAXWindowMovedNotification as CFString)
+        Self.linkedResizeLog.debug("stopWatching \(windowID) \(self.appLabel(for: observation.pid), privacy: .public)")
+        if let appObservation = linkedResizeAppObservers[observation.pid] {
+            AXObserverRemoveNotification(appObservation.observer, observation.window, kAXResizedNotification as CFString)
+            AXObserverRemoveNotification(appObservation.observer, observation.window, kAXMovedNotification as CFString)
+            linkedResizeAppObservers[observation.pid]?.watchedWindows.remove(windowID)
+        }
         linkedResizePendingWindows.remove(windowID)
         linkedResizeSelfInitiated.removeValue(forKey: windowID)
+        stopAppObservationIfUnused(pid: observation.pid)
+    }
+
+    /// Tears down the shared per-process observer once nothing of that
+    /// process is being watched any more — called after every window
+    /// leaves (`stopWatchingLinkedResize`) and after a failed window-level
+    /// registration (`startWatchingLinkedResize`), so a process that never
+    /// ends up with a single successfully watched window does not leave an
+    /// app-level observer running for nothing.
+    private func stopAppObservationIfUnused(pid: pid_t) {
+        guard let appObservation = linkedResizeAppObservers[pid], appObservation.watchedWindows.isEmpty else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(appObservation.observer), .commonModes)
+        AXObserverRemoveNotification(appObservation.observer, appObservation.app, kAXWindowResizedNotification as CFString)
+        AXObserverRemoveNotification(appObservation.observer, appObservation.app, kAXWindowMovedNotification as CFString)
+        linkedResizeAppObservers.removeValue(forKey: pid)
+    }
+
+    /// Resolves an app-level notification's `element` (the window that
+    /// actually moved/resized, per Apple's own header comments for
+    /// `kAXWindowResizedNotification`/`kAXWindowMovedNotification`) to one
+    /// of `pid`'s watched windowIDs. Three passes, cheapest first:
+    ///
+    /// 1. The private `_AXUIElementGetWindow` bridge `AXWindowResolver`
+    ///    wraps — usually exact and free of any extra AX round trip, but
+    ///    reported flaky specifically for Chromium/Electron windows, which
+    ///    do not always back it with a value that resolves.
+    /// 2. Element identity: `AXUIElement` supports `CFEqual` for "the same
+    ///    underlying accessibility object", so the cached element from
+    ///    `startWatchingLinkedResize` is compared directly against the
+    ///    notification's `element` — exact, and also free of any AX call.
+    /// 3. Frame matching: reads `element`'s own live frame and the frame of
+    ///    every one of `pid`'s watched windows, and returns whichever one is
+    ///    close enough to count as the same window. The one path that costs
+    ///    real AX round trips, kept last and only reached when the first two
+    ///    both come up empty — which the flaky-identifier apps this exists
+    ///    for are exactly the case that needs it.
+    private func resolveLinkedResizeWindowID(element: AXUIElement, pid: pid_t) -> CGWindowID? {
+        guard let watched = linkedResizeAppObservers[pid]?.watchedWindows, !watched.isEmpty else { return nil }
+
+        if let windowID = AXWindowResolver.windowID(for: element), watched.contains(windowID) {
+            return windowID
+        }
+        if let matched = watched.first(where: { windowID in
+            guard let cached = linkedResizeObservers[windowID]?.window else { return false }
+            return CFEqual(cached, element)
+        }) {
+            return matched
+        }
+        guard let elementFrame = frame(of: element) else { return nil }
+        return watched.first { windowID in
+            guard let cached = linkedResizeObservers[windowID]?.window,
+                  let cachedFrame = frame(of: cached)
+            else { return false }
+            return elementFrame.isClose(to: cachedFrame, tolerance: 2)
+        }
     }
 
     /// Called from the C observer callback (on the main run loop, since the
     /// observer's run-loop source was added there — no further dispatch
-    /// needed, matching `AutoQuitService.handleAX`). Verifies the notifying
-    /// element still belongs to the process this service started watching
-    /// before doing anything else: `CGWindowID` values are reused by the
-    /// window server, so a stale observer whose original window closed and
-    /// whose numeric id was handed to an unrelated new window must never be
-    /// allowed to act on that new window's notifications.
+    /// needed, matching `AutoQuitService.handleAX`). Resolves the notifying
+    /// element to one of *this process's* watched windows
+    /// (`resolveLinkedResizeWindowID`) before doing anything else — a
+    /// shared observer now receives every one of a process's watched
+    /// windows' notifications together, so telling them apart correctly is
+    /// the whole job here, not an afterthought.
     func handleLinkedResizeNotification(element: AXUIElement, notification: String) {
         var elementPID: pid_t = 0
         AXUIElementGetPid(element, &elementPID)
-        guard let windowID = AXWindowResolver.windowID(for: element) else {
+        let label = appLabel(for: elementPID)
+        guard elementPID != 0, linkedResizeAppObservers[elementPID] != nil else {
             Self.linkedResizeLog.debug("""
-                notification \(notification, privacy: .public) pid \(elementPID): \
-                could not resolve a windowID for the notifying element
+                notification \(notification, privacy: .public) \(label, privacy: .public): \
+                no app observation for this pid, ignoring
                 """)
             return
         }
-        guard let observation = linkedResizeObservers[windowID] else {
+        guard let windowID = resolveLinkedResizeWindowID(element: element, pid: elementPID) else {
             Self.linkedResizeLog.debug("""
-                notification \(notification, privacy: .public) window \(windowID) pid \(elementPID): \
-                not a watched window, ignoring
+                notification \(notification, privacy: .public) \(label, privacy: .public): \
+                could not resolve the notifying element to any watched window of this process \
+                (tried AX window id, element identity, and frame matching) — skipping this notification
                 """)
             return
         }
-        guard observation.pid == elementPID else {
-            Self.linkedResizeLog.debug("""
-                notification \(notification, privacy: .public) window \(windowID): \
-                pid mismatch (watching pid \(observation.pid), notification from pid \(elementPID)) — \
-                dropping the stale observer
-                """)
-            // Not a window this service is watching under that id, or the
-            // id was recycled since watching started — either way, a stale
-            // entry left over is not worth keeping around either.
-            stopWatchingLinkedResize(windowID)
-            return
-        }
-        Self.linkedResizeLog.debug("notification \(notification, privacy: .public) window \(windowID) pid \(elementPID): scheduling")
+        Self.linkedResizeLog.debug("notification \(notification, privacy: .public) window \(windowID) \(label, privacy: .public): scheduling")
         scheduleLinkedResizeProcessing(windowID: windowID)
     }
 
@@ -1711,6 +1814,7 @@ final class WindowLayoutService: ObservableObject {
             Self.linkedResizeLog.debug("process \(windowID): no observation for this window (not/no longer watched)")
             return
         }
+        let label = appLabel(for: observation.pid)
         // The owning app quitting is the one way a member stops existing
         // without ever posting a notification this service would otherwise
         // notice — checked before touching Accessibility at all, since a
@@ -1718,23 +1822,33 @@ final class WindowLayoutService: ObservableObject {
         // to protect against, not something to spend one on.
         guard let runningApp = NSRunningApplication(processIdentifier: observation.pid), !runningApp.isTerminated
         else {
-            Self.linkedResizeLog.debug("process \(windowID) pid \(observation.pid): owning app gone, dropping observer")
+            Self.linkedResizeLog.debug("process \(windowID) \(label, privacy: .public): owning app gone, dropping observer")
             stopWatchingLinkedResize(windowID)
             return
         }
+        // A read that times out (a real risk against Chromium/Electron and
+        // Finder under load, even at `linkedResizeMessagingTimeout`) is
+        // never treated as "this member is gone" — it simply skips this one
+        // notification and leaves the member watched, so the next
+        // notification tries again instead of the neighbour silently
+        // losing its link.
         guard !boolAttribute(observation.window, kAXMinimizedAttribute as String) else {
-            Self.linkedResizeLog.debug("process \(windowID): window is minimized, skipping")
+            Self.linkedResizeLog.debug("process \(windowID) \(label, privacy: .public): window is minimized, skipping this notification")
             return
         }
         guard let liveAXFrame = frame(of: observation.window) else {
-            Self.linkedResizeLog.debug("process \(windowID): could not read the live AX frame")
+            Self.linkedResizeLog.debug("""
+                process \(windowID) \(label, privacy: .public): could not read the live AX frame (timeout or \
+                transient AX failure) — skipping this notification, member stays watched, next notification retries
+                """)
             return
         }
         let newFrame = appKitFrame(fromAX: liveAXFrame)
         guard !isSelfInitiatedEcho(windowID: windowID, liveFrame: newFrame) else {
             Self.linkedResizeLog.debug("""
-                process \(windowID): live frame \(String(describing: newFrame), privacy: .public) matches a \
-                recent self-initiated write, treating as an echo
+                process \(windowID) \(label, privacy: .public): live frame \
+                \(String(describing: newFrame), privacy: .public) matches a recent self-initiated write, \
+                treating as an echo
                 """)
             return
         }
@@ -1742,19 +1856,19 @@ final class WindowLayoutService: ObservableObject {
         guard let group = snapGroups.values.first(where: { grp in grp.members.contains { $0.windowID == windowID } }),
               let resizedMember = group.members.first(where: { $0.windowID == windowID })
         else {
-            Self.linkedResizeLog.debug("process \(windowID): window is not a member of any Snap Group right now")
+            Self.linkedResizeLog.debug("process \(windowID) \(label, privacy: .public): window is not a member of any Snap Group right now")
             return
         }
         let oldFrame = resizedMember.frame
         guard oldFrame != newFrame else {
             Self.linkedResizeLog.debug("""
-                process \(windowID): live frame matches the stored zone \
+                process \(windowID) \(label, privacy: .public): live frame matches the stored zone \
                 \(String(describing: oldFrame), privacy: .public), nothing changed
                 """)
             return
         }
         Self.linkedResizeLog.debug("""
-            process \(windowID): old=\(String(describing: oldFrame), privacy: .public) \
+            process \(windowID) \(label, privacy: .public): old=\(String(describing: oldFrame), privacy: .public) \
             new=\(String(describing: newFrame), privacy: .public)
             """)
 
@@ -1772,7 +1886,7 @@ final class WindowLayoutService: ObservableObject {
         }
 
         guard let screen = NSScreen.screens.first(where: { $0.displayID == group.screenID }) else {
-            Self.linkedResizeLog.debug("process \(windowID): could not resolve a screen for this group's displayID")
+            Self.linkedResizeLog.debug("process \(windowID) \(label, privacy: .public): could not resolve a screen for this group's displayID")
             return
         }
         let zones = theoreticalZones(for: group, on: screen)
@@ -1790,10 +1904,10 @@ final class WindowLayoutService: ObservableObject {
             currentFrames: liveFrames,
             minimumSize: { _ in Self.linkedResizeMinimumSizeGuess })
         guard !adjustments.isEmpty else {
-            Self.linkedResizeLog.debug("process \(windowID): no neighbour touches the edge(s) that moved")
+            Self.linkedResizeLog.debug("process \(windowID) \(label, privacy: .public): no neighbour touches the edge(s) that moved")
             return
         }
-        Self.linkedResizeLog.debug("process \(windowID): \(adjustments.count) adjustment(s) computed, applying")
+        Self.linkedResizeLog.debug("process \(windowID) \(label, privacy: .public): \(adjustments.count) adjustment(s) computed, applying")
 
         applyLinkedResizeAdjustments(adjustments,
                                      resizedWindowID: windowID,
@@ -1899,10 +2013,12 @@ final class WindowLayoutService: ObservableObject {
     /// for any further correction this pass.
     @discardableResult
     private func writeLinkedResizeFrame(_ rect: CGRect, windowID: CGWindowID) -> CGRect? {
-        guard let axWindow = linkedResizeObservers[windowID]?.window else {
+        guard let observation = linkedResizeObservers[windowID] else {
             Self.linkedResizeLog.debug("write \(windowID): no observation window element, cannot write")
             return nil
         }
+        let axWindow = observation.window
+        let label = appLabel(for: observation.pid)
         let axRect = axFrame(fromAppKit: rect)
         var size = axRect.size
         var origin = axRect.origin
@@ -1927,16 +2043,17 @@ final class WindowLayoutService: ObservableObject {
         // unreachable.
         guard let actual = frame(of: axWindow) else {
             Self.linkedResizeLog.debug("""
-                write \(windowID) requested \(String(describing: rect), privacy: .public): \
+                write \(windowID) \(label, privacy: .public) requested \(String(describing: rect), privacy: .public): \
                 setSize=\(String(describing: sizeError), privacy: .public) \
                 setPosition=\(String(describing: positionError), privacy: .public) \
-                read-back failed
+                read-back failed (timeout or transient AX failure) — member stays watched, treated as \
+                unreachable for this pass only
                 """)
             return nil
         }
         let actualFrame = appKitFrame(fromAX: actual)
         Self.linkedResizeLog.debug("""
-            write \(windowID) requested \(String(describing: rect), privacy: .public): \
+            write \(windowID) \(label, privacy: .public) requested \(String(describing: rect), privacy: .public): \
             setSize=\(String(describing: sizeError), privacy: .public) \
             setPosition=\(String(describing: positionError), privacy: .public) \
             actual=\(String(describing: actualFrame), privacy: .public)
