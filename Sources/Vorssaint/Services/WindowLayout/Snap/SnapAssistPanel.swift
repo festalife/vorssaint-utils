@@ -3,22 +3,7 @@
 
 import AppKit
 import Carbon.HIToolbox
-import os.log
 
-/// Always-on, persisted logging for the Snap Assist click path — session
-/// start/skip, the overlay opening, every mouse-down this panel receives,
-/// a card being pressed, the resulting placement, and every dismissal —
-/// shared by this file, `SnapAssistPanelView.swift`, and
-/// `WindowLayoutService`. Deliberately `.info`, not `.debug`: `debug`-level
-/// `os.Logger` messages are filtered out of both `log stream` and
-/// `log show` by default, which cost real time on this exact feature
-/// before (needing `--level debug`) and, on the next real-Mac report, cost
-/// it again — nothing reached `log show` at all because the logging was
-/// still behind `VORSSAINT_SNAP_ASSIST_DEBUG` and NSLog, which a plain
-/// `log show --predicate 'process == "…"'` does not surface by default
-/// either. `.info` needs no flag on either side and is what actually
-/// reached the log this time.
-let snapAssistLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "vorssaint", category: "snapAssist")
 
 /// Borderless panels refuse key status by default, and this one genuinely
 /// needs it — see `SnapAssistPanel`'s own doc comment for why a real
@@ -43,8 +28,8 @@ private final class KeyableSnapAssistPanel: NSPanel {
             let windowPoint = event.locationInWindow
             let hit = contentView?.hitTest(windowPoint)
             let hitDescription = hit.map { String(describing: type(of: $0)) } ?? "nil"
-            snapAssistLog.info(
-                "panel mouseDown windowPoint=\(String(describing: windowPoint), privacy: .public) hit=\(hitDescription, privacy: .public) isKeyWindow=\(self.isKeyWindow)")
+            SnapLog.event("assist.panel-down",
+                          "at=\(SnapLog.point(windowPoint)) hit=\(hitDescription) key=\(self.isKeyWindow)")
         case .leftMouseUp:
             isLeftMouseDownInside = false
             // Independent of key/activation state and of whether the
@@ -141,7 +126,7 @@ final class SnapAssistPanel {
     /// single place its `snapAssistSession` is cleared, so a dismissal this
     /// panel notices on its own (Esc, losing key) ends the session exactly
     /// as reliably as one `WindowLayoutService` itself decided on.
-    var onDismiss: (() -> Void)?
+    var onDismiss: ((String) -> Void)?
 
     /// Spec §4 point 4: eight seconds of inactivity closes the overlay and
     /// leaves the space free, the same as Esc or a click elsewhere.
@@ -179,8 +164,8 @@ final class SnapAssistPanel {
         content.configure(items: items, columns: columns, hint: hint, onSelect: onSelect)
 
         panel.setFrame(frame, display: true)
-        snapAssistLog.info(
-            "overlay shown computedFrame=\(String(describing: frame), privacy: .public) panelFrame=\(String(describing: panel.frame), privacy: .public) contentViewFrame=\(String(describing: content.frame), privacy: .public) columns=\(columns) items=\(items.count)")
+        SnapLog.event("assist.overlay-show",
+                      "frame=\(SnapLog.rect(frame)) columns=\(columns) items=\(items.count)")
         assert(!panel.ignoresMouseEvents,
               "SnapAssistPanel must always accept mouse events — a card that cannot be clicked is the whole bug this type exists to avoid")
 
@@ -233,12 +218,12 @@ final class SnapAssistPanel {
         dismissTimer = nil
         removeMonitors()
         guard let panel, panel.isVisible else {
-            snapAssistLog.info("hide ignored, already hidden. reason=\(reason, privacy: .public)")
+            SnapLog.event("assist.overlay-hide-noop", "reason=\(reason)")
             return
         }
-        snapAssistLog.info("overlay dismissed reason=\(reason, privacy: .public)")
+        SnapLog.event("assist.overlay-hide", "reason=\(reason)")
         panel.orderOut(nil)
-        onDismiss?()
+        onDismiss?(reason)
     }
 
     /// The panel's frame for `itemCount` items covering `freeRect`, and the
@@ -345,15 +330,15 @@ final class SnapAssistPanel {
             guard let self, let panel else { return }
             let now = ProcessInfo.processInfo.systemUptime
             if now < self.suppressResignDismissUntil {
-                snapAssistLog.info("resign-key ignored: within pick re-activation suppression window")
+                SnapLog.event("assist.resign-ignored", "reason=pick-reactivation-window")
                 return
             }
             if now - self.shownAt < Self.resignAfterShowGracePeriod {
-                snapAssistLog.info("resign-key ignored: within \(Self.resignAfterShowGracePeriod, format: .fixed(precision: 2))s of show()")
+                SnapLog.event("assist.resign-ignored", "reason=within-grace-of-show")
                 return
             }
             if panel.isLeftMouseDownInside {
-                snapAssistLog.info("resign-key ignored: a left-button press inside the panel is still down")
+                SnapLog.event("assist.resign-ignored", "reason=click-still-in-flight")
                 return
             }
             self.hide(reason: "resigned key (click outside or app switch)")

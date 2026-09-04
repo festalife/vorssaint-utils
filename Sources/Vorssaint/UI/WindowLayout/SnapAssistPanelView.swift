@@ -209,8 +209,8 @@ final class SnapAssistCardButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        snapAssistLog.info(
-            "card mouseDown title=\(self.title, privacy: .public) windowID=\(self.windowID) locationInWindow=\(String(describing: event.locationInWindow), privacy: .public) bounds=\(String(describing: self.bounds), privacy: .public)")
+        SnapLog.event("assist.card-down",
+                      "windowID=\(self.windowID) at=\(SnapLog.point(event.locationInWindow)) bounds=\(SnapLog.rect(self.bounds))")
         super.mouseDown(with: event)
     }
 
@@ -220,13 +220,11 @@ final class SnapAssistCardButton: NSButton {
     /// panel's direct hit-test fallback (see that type's own doc comment).
     func triggerSelect(eventNumber: Int, source: String) {
         guard lastHandledEventNumber != eventNumber else {
-            snapAssistLog.info(
-                "card press ignored (already handled this click) title=\(self.title, privacy: .public) windowID=\(self.windowID) source=\(source, privacy: .public)")
+            SnapLog.event("assist.card-press-duplicate", "windowID=\(self.windowID) source=\(source)")
             return
         }
         lastHandledEventNumber = eventNumber
-        snapAssistLog.info(
-            "card press title=\(self.title, privacy: .public) windowID=\(self.windowID) source=\(source, privacy: .public)")
+        SnapLog.event("assist.card-press", "windowID=\(self.windowID) source=\(source)")
         onSelect?()
     }
 

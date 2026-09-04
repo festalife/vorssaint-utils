@@ -394,12 +394,13 @@ if (( TEST )); then
         Sources/Vorssaint/Services/Metrics/SustainedAlertGate.swift \
         Sources/Vorssaint/Services/WindowLayout/WindowLayoutSupport.swift \
         Sources/Vorssaint/Services/WindowLayout/WindowGestureSupport.swift \
-        Sources/Vorssaint/Services/WindowLayout/SnapLayoutsSupport.swift \
-        Sources/Vorssaint/Services/WindowLayout/SnapGroupSupport.swift \
-        Sources/Vorssaint/Services/WindowLayout/SnapAssistSupport.swift \
-        Sources/Vorssaint/Services/WindowLayout/SnapLinkedResizeSupport.swift \
-        Sources/Vorssaint/Services/WindowLayout/SnapRestoreOnDragSupport.swift \
-        Sources/Vorssaint/Services/WindowLayout/SnapDividerHintSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/Snap/SnapLayoutsSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/Snap/SnapGroupSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/Snap/SnapAssistSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/Snap/SnapLinkedResizeSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/Snap/SnapRestoreOnDragSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/Snap/SnapDividerHintSupport.swift \
+        Sources/Vorssaint/Services/WindowLayout/Snap/SnapControllerSupport.swift \
         Sources/Vorssaint/Core/WindowDirectionalStrings.swift \
         Sources/Vorssaint/Services/CleaningMode/CleaningUnlockCounter.swift \
         Sources/Vorssaint/Services/Display/ExtraBrightnessSupport.swift \
