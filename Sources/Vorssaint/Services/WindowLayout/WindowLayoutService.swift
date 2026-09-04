@@ -1160,12 +1160,14 @@ final class WindowLayoutService: ObservableObject {
               SnapGroupSupport.joinsGroup(action),
               let screen = screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
         else {
+            snapAssistLog.info(
+                "session skip: not eligible. action=\(String(describing: action), privacy: .public) windowID=\(windowID) fromSnapAssist=\(fromSnapAssist) enabled=\(self.snapAssistEnabled) joinsGroup=\(SnapGroupSupport.joinsGroup(action)) screenResolved=\(self.screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame) != nil)")
             if Self.snapAssistDebugLogging {
                 let detail = "handleSnapAssist bailing before any session logic: action=\(action) " +
                     "windowID=\(windowID) fromSnapAssist=\(fromSnapAssist) enabled=\(self.snapAssistEnabled) " +
                     "joinsGroup=\(SnapGroupSupport.joinsGroup(action)) " +
                     "screenResolved=\(self.screen(matchingVisibleFrame: visibleFrame, fallbackFrame: fallbackFrame) != nil)"
-                Self.snapAssistLog.debug("\(detail, privacy: .public)")
+                Self.snapAssistDebugLog.debug("\(detail, privacy: .public)")
             }
             snapAssistSession = nil
             hideSnapAssist()
@@ -1180,6 +1182,8 @@ final class WindowLayoutService: ObservableObject {
             // somehow outlived its own session (e.g. it was dismissed
             // between the click and this callback); nothing to advance.
             guard var session = snapAssistSession, session.screenID == screen.displayID else {
+                snapAssistLog.info(
+                    "session skip: pick outlived its session. action=\(String(describing: action), privacy: .public) windowID=\(windowID) haveSession=\(self.snapAssistSession != nil)")
                 snapAssistSession = nil
                 hideSnapAssist()
                 return
@@ -1189,10 +1193,14 @@ final class WindowLayoutService: ObservableObject {
                 // Every free cell in this layout is now filled — the
                 // session is finished (spec: "or, if none remain, ends the
                 // session").
+                snapAssistLog.info(
+                    "session finished: every free cell picked. action=\(String(describing: action), privacy: .public) windowID=\(windowID)")
                 snapAssistSession = nil
                 hideSnapAssist()
                 return
             }
+            snapAssistLog.info(
+                "session advanced: action=\(String(describing: action), privacy: .public) windowID=\(windowID) nextCell=\(String(describing: cell), privacy: .public)")
             snapAssistSession = session
             presentCell(cell, action: action, windowID: windowID, screen: screen,
                        visibleFrame: visibleFrame, fallbackFrame: fallbackFrame)
@@ -1211,12 +1219,14 @@ final class WindowLayoutService: ObservableObject {
         let session = SnapAssistSupport.SnapAssistSession.start(from: action,
                                                                  screenID: screen.displayID,
                                                                  occupiedCells: occupied)
+        snapAssistLog.info(
+            "session start attempt: action=\(String(describing: action), privacy: .public) windowID=\(windowID) siblings=\(String(describing: SnapAssistSupport.siblingZones(of: action)), privacy: .public) occupied=\(String(describing: occupied), privacy: .public) freeCells=\(session.map { String(describing: $0.freeCells) } ?? "nil (no free cells — session not started)", privacy: .public)")
         if Self.snapAssistDebugLogging {
             let detail = "handleSnapAssist user-initiated: action=\(action) " +
                 "windowID=\(windowID) siblings=\(SnapAssistSupport.siblingZones(of: action)) " +
                 "occupied=\(occupied) " +
                 "session=\(session.map { String(describing: $0.freeCells) } ?? "nil (no free cells)")"
-            Self.snapAssistLog.debug("\(detail, privacy: .public)")
+            Self.snapAssistDebugLog.debug("\(detail, privacy: .public)")
         }
         guard let session, let cell = session.currentCell else {
             snapAssistSession = nil
@@ -1275,7 +1285,7 @@ final class WindowLayoutService: ObservableObject {
                 let detail = "occupiedSiblingCells cell=\(cell) " +
                     "cellRect=\(rect) occupied=\(isOccupied) " +
                     "windows: \(coverage.isEmpty ? "(none on screen)" : coverage)"
-                Self.snapAssistLog.debug("\(detail, privacy: .public)")
+                Self.snapAssistDebugLog.debug("\(detail, privacy: .public)")
             }
             if isOccupied {
                 occupied.insert(cell)
@@ -1339,13 +1349,13 @@ final class WindowLayoutService: ObservableObject {
                 let detail = "snapAssistOffering: freeRect not offerable. cell=\(cell) " +
                     "theoreticalZone=\(theoreticalZone) " +
                     "freeRect=\(freeRect)"
-                Self.snapAssistLog.debug("\(detail, privacy: .public)")
+                Self.snapAssistDebugLog.debug("\(detail, privacy: .public)")
             }
             return nil
         }
         if Self.snapAssistDebugLogging {
             let detail = "snapAssistOffering: cell=\(cell) freeRect=\(freeRect) itemCount=\(items.count)"
-            Self.snapAssistLog.debug("\(detail, privacy: .public)")
+            Self.snapAssistDebugLog.debug("\(detail, privacy: .public)")
         }
         return (freeRect, items)
     }
@@ -1592,7 +1602,7 @@ final class WindowLayoutService: ObservableObject {
     /// path stays quiet in the unified log for everyone else.
     private static let snapAssistDebugLogging =
         ProcessInfo.processInfo.environment["VORSSAINT_SNAP_ASSIST_DEBUG"] != nil
-    private static let snapAssistLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "vorssaint",
+    private static let snapAssistDebugLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "vorssaint",
                                               category: "snap-assist")
 
     private func logSnapAssistFailure(_ reason: String,
@@ -1611,7 +1621,7 @@ final class WindowLayoutService: ObservableObject {
         } else {
             detail += " (no AXUIElement resolved)"
         }
-        Self.snapAssistLog.debug(
+        Self.snapAssistDebugLog.debug(
             "Snap Assist placement failed: \(detail, privacy: .public) windowID=\(windowID) pid=\(pid)")
     }
 
@@ -1627,7 +1637,13 @@ final class WindowLayoutService: ObservableObject {
     /// so the person can try a different window instead of losing the
     /// whole overlay to one failed pick.
     private func selectSnapAssistCandidate(_ item: SwitcherItem, cell: WindowLayoutAction, screen: NSScreen) {
-        guard let windowID = item.windowID else { return }
+        guard let windowID = item.windowID else {
+            snapAssistLog.info(
+                "card selected but has no windowID, ignoring. title=\(item.displayTitle, privacy: .public) cell=\(String(describing: cell), privacy: .public)")
+            return
+        }
+        snapAssistLog.info(
+            "card selected: title=\(item.displayTitle, privacy: .public) windowID=\(windowID) cell=\(String(describing: cell), privacy: .public)")
         snapAssistPanel?.ignorePendingResign()
         applySnapAssistPlacement(cell, windowID: windowID, pid: item.windowOwnerPID, screen: screen)
     }
@@ -1643,11 +1659,15 @@ final class WindowLayoutService: ObservableObject {
                                           windowID: CGWindowID,
                                           pid: pid_t,
                                           screen: NSScreen) -> WindowLayoutResult {
-        guard AXIsProcessTrusted() else { return finish(.failure(.missingAccessibility)) }
+        guard AXIsProcessTrusted() else {
+            snapAssistLog.info("placement result: failed, missingAccessibility. windowID=\(windowID) pid=\(pid)")
+            return finish(.failure(.missingAccessibility))
+        }
         let axApp = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(axApp, 0.35)
         guard let window = axElement(windowID: windowID, in: axApp) else {
             logSnapAssistFailure("no AXUIElement for windowID", windowID: windowID, pid: pid, window: nil)
+            snapAssistLog.info("placement result: failed, noWindow (no AXUIElement). windowID=\(windowID) pid=\(pid)")
             return finish(.failure(.noWindow))
         }
         activateSnapAssistTarget(window: window, axApp: axApp, pid: pid)
@@ -1665,10 +1685,16 @@ final class WindowLayoutService: ObservableObject {
                                   capability: action.targetCapability)
         else {
             logSnapAssistFailure("target(from:) rejected the window", windowID: windowID, pid: pid, window: window)
+            snapAssistLog.info(
+                "placement result: failed, noWindow (target(from:) rejected it). windowID=\(windowID) pid=\(pid) currentFrame=\(String(describing: self.frame(of: window)), privacy: .public)")
             return finish(.failure(.noWindow))
         }
         pruneWindowState(keeping: target.key)
-        return applyPlacement(action, to: target, visibleFrame: screen.visibleFrame, fromSnapAssist: true)
+        let result = applyPlacement(action, to: target, visibleFrame: screen.visibleFrame, fromSnapAssist: true)
+        let finalFrame = self.frame(of: window)
+        snapAssistLog.info(
+            "placement result: \(String(describing: result), privacy: .public) windowID=\(windowID) pid=\(pid) action=\(String(describing: action), privacy: .public) finalFrame=\(String(describing: finalFrame), privacy: .public)")
+        return result
     }
 
     /// Un-minimizes and raises `window` directly through the AXUIElement

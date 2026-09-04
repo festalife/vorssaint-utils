@@ -144,6 +144,17 @@ final class SnapAssistCardButton: NSButton {
     var onSelect: (() -> Void)?
     private var trackingArea: NSTrackingArea?
     private let appIcon: NSImage?
+    /// The `NSEvent.eventNumber` of the physical click `triggerSelect`
+    /// already fired `onSelect` for — de-duplication between the two
+    /// independent paths that can now trigger a pick for the very same
+    /// click: NSButton's own mouseDown/mouseUp tracking loop
+    /// (`handleClick`, via `target`/`action`) and
+    /// `KeyableSnapAssistPanel.sendEvent`'s own direct hit-test on
+    /// `leftMouseUp` (added because a real-Mac report found clicks that
+    /// visibly reached this window still not picking a card — belt and
+    /// braces, not a replacement for fixing why the first path can miss).
+    /// `nil` means no click has been handled yet.
+    private var lastHandledEventNumber: Int?
 
     init(item: SwitcherItem) {
         self.windowID = item.windowID ?? 0
@@ -198,15 +209,29 @@ final class SnapAssistCardButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        if ProcessInfo.processInfo.environment["VORSSAINT_SNAP_ASSIST_DEBUG"] != nil {
-            NSLog("[snap-assist-panel] SnapAssistCardButton.mouseDown windowID=\(windowID) " +
-                  "locationInWindow=\(event.locationInWindow) bounds=\(bounds) frame=\(frame)")
-        }
+        snapAssistLog.info(
+            "card mouseDown title=\(self.title, privacy: .public) windowID=\(self.windowID) locationInWindow=\(String(describing: event.locationInWindow), privacy: .public) bounds=\(String(describing: self.bounds), privacy: .public)")
         super.mouseDown(with: event)
     }
 
-    @objc private func handleClick() {
+    /// Fires `onSelect` for `eventNumber`, the first time only — `source`
+    /// is just for the log line, so a real-Mac report can tell whether a
+    /// pick happened through NSButton's own tracking loop or through the
+    /// panel's direct hit-test fallback (see that type's own doc comment).
+    func triggerSelect(eventNumber: Int, source: String) {
+        guard lastHandledEventNumber != eventNumber else {
+            snapAssistLog.info(
+                "card press ignored (already handled this click) title=\(self.title, privacy: .public) windowID=\(self.windowID) source=\(source, privacy: .public)")
+            return
+        }
+        lastHandledEventNumber = eventNumber
+        snapAssistLog.info(
+            "card press title=\(self.title, privacy: .public) windowID=\(self.windowID) source=\(source, privacy: .public)")
         onSelect?()
+    }
+
+    @objc private func handleClick() {
+        triggerSelect(eventNumber: NSApp.currentEvent?.eventNumber ?? -1, source: "NSButton action")
     }
 
     override func updateTrackingAreas() {
