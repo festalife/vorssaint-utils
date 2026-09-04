@@ -7165,6 +7165,121 @@ struct MetricsTests {
                                                        cursor: .zero) == CGRect(origin: .zero, size: srodRestoreSize),
                "a degenerate zero-size current frame still returns a usable restored rect at its own origin")
 
+        // MARK: Snap state machine
+
+        // The whole transition table, phase by phase. Every one of these is a
+        // decision `SnapController` used to make with scattered booleans; the
+        // machine is the only thing that decides now, so the table is the
+        // feature's contract.
+        var machine = SnapStateMachine()
+        expect(machine.phase == .idle, "the snap state machine starts idle")
+
+        let smDrag = machine.apply(.dragBegan(windowID: 11))
+        expect(smDrag.to == .dragging(SnapDragState(windowID: 11)),
+               "a confirmed drag moves the machine out of idle")
+        expect(smDrag.reason.contains("windowID=11"),
+               "every transition names the window it was about")
+
+        expect(machine.apply(.dragTargetChanged(.leftHalf)).to
+               == .dragging(SnapDragState(windowID: 11, target: .leftHalf)),
+               "a resolved zone is remembered on the drag")
+        expect(!machine.apply(.dragTargetChanged(.leftHalf)).changed,
+               "the same zone twice is not a transition")
+        expect(machine.apply(.layoutsPanelChanged(true)).to
+               == .dragging(SnapDragState(windowID: 11, target: .leftHalf, layoutsPanelOpen: true)),
+               "the Snap Layouts bar opening is part of the drag phase, not a separate flag")
+        expect(machine.apply(.dragTargetChanged(nil)).to
+               == .dragging(SnapDragState(windowID: 11, target: nil, layoutsPanelOpen: true)),
+               "dragging back over open screen clears the zone without ending the drag")
+
+        expect(machine.apply(.dragEnded(reason: "release over open screen")).to == .idle,
+               "a release with no zone goes straight back to idle")
+        expect(!machine.apply(.dragTargetChanged(.rightHalf)).changed,
+               "a zone change while idle is ignored, never a silent mutation")
+
+        // A user placement always reaches `.placed`, whether or not the window
+        // had to move — the case that used to return early and skip Snap
+        // Assist entirely, which is why the overlay appeared the first time a
+        // window was snapped left and not the second.
+        let smPlacement = SnapPlacement(windowID: 11, action: .leftHalf, screenID: 7)
+        expect(machine.apply(.placementLanded(smPlacement, origin: .user)).to == .placed(smPlacement),
+               "a user placement lands in the placed phase")
+
+        // A quarters placement with one sibling already filled still has two
+        // free cells, so a session always opens here; the empty fallback only
+        // exists so one broken expectation cannot abort every later check.
+        let smSession = SnapAssistSupport.SnapAssistSession.start(from: .topLeft,
+                                                                  screenID: 7,
+                                                                  occupiedCells: [.bottomRight])
+            ?? SnapAssistSupport.SnapAssistSession(screenID: 0, freeCells: [])
+        expect(smSession.freeCells == [.topRight, .bottomLeft],
+               "a quarters placement offers its two remaining cells in reading order")
+        expect(machine.apply(.assistSessionOpened(smSession)).to == .assisting(smSession),
+               "the placed phase hands over to an open Snap Assist session")
+        expect(smSession.currentCell == .topRight,
+               "the session offers the first free sibling cell in reading order")
+
+        // A pick only ever advances the session it came from.
+        let smPickPlacement = SnapPlacement(windowID: 22, action: .topRight, screenID: 7)
+        expect(machine.apply(.placementLanded(smPickPlacement, origin: .snapAssist)).to == .assisting(smSession),
+               "a Snap Assist placement never restarts the session it belongs to")
+        let smAdvanced = machine.apply(.assistCellPicked(.topRight))
+        expect(smAdvanced.to == .assisting(smSession.pick(.topRight)),
+               "filling the offered cell advances to the next free one")
+        expect(machine.apply(.assistCellPicked(.bottomRight)).changed == false,
+               "a pick that is not the current cell leaves the session alone")
+
+        expect(machine.apply(.assistCellPicked(.bottomLeft)).to == .idle,
+               "filling the last free cell finishes the session")
+
+        // Esc / click outside / app switch / timeout all arrive as one event.
+        var smDismiss = SnapStateMachine(phase: .assisting(smSession))
+        let smDismissed = smDismiss.apply(.assistDismissed(reason: "Esc"))
+        expect(smDismissed.to == .idle && smDismissed.reason.contains("Esc"),
+               "a dismissal ends the session and carries its reason into the log")
+
+        // Spec §9's "doppia richiesta": a second window dragged to an edge
+        // while the overlay is open closes it, and the drag wins.
+        var smSuperseded = SnapStateMachine(phase: .assisting(smSession))
+        let smSupersede = smSuperseded.apply(.dragBegan(windowID: 33))
+        expect(smSupersede.to == .dragging(SnapDragState(windowID: 33)),
+               "a fresh drag supersedes an open Snap Assist session")
+        expect(smSupersede.reason.contains("supersedes"),
+               "and says so, rather than the session simply vanishing from the log")
+
+        // A pick whose session was dismissed between the click and the
+        // placement completing must never start a new session on its own.
+        var smOrphan = SnapStateMachine()
+        expect(smOrphan.apply(.placementLanded(smPickPlacement, origin: .snapAssist)).to == .idle,
+               "an assist placement that outlived its session ends idle, never placed")
+
+        var smReset = SnapStateMachine(phase: .dragging(SnapDragState(windowID: 44)))
+        expect(smReset.apply(.reset(reason: "Accessibility revoked")).to == .idle,
+               "a reset returns to idle from any phase")
+
+        // MARK: Snap coordinate conversion
+
+        // One helper, used by every conversion in the subsystem, so a sign
+        // error can only be made — and fixed — once. Numbers here are a real
+        // 1512x982 built-in display with the menu bar at AppKit y = 982.
+        let scTopY: CGFloat = 982
+        expect(SnapCoordinates.appKitPoint(fromQuartz: CGPoint(x: 100, y: 0), menuBarTopY: scTopY)
+               == CGPoint(x: 100, y: 982),
+               "the very top of the window-server space is the top of the AppKit space")
+        expect(SnapCoordinates.appKitPoint(fromQuartz: CGPoint(x: 100, y: 982), menuBarTopY: scTopY)
+               == CGPoint(x: 100, y: 0),
+               "and its bottom is AppKit's origin")
+        let scQuartzRect = CGRect(x: 40, y: 60, width: 700, height: 400)
+        let scAppKitRect = SnapCoordinates.appKitRect(fromQuartz: scQuartzRect, menuBarTopY: scTopY)
+        expect(scAppKitRect == CGRect(x: 40, y: 522, width: 700, height: 400),
+               "a window-server rect flips about the menu bar screen's top edge, keeping its size")
+        expect(SnapCoordinates.quartzRect(fromAppKit: scAppKitRect, menuBarTopY: scTopY) == scQuartzRect,
+               "and converting back is exact, in both directions")
+        expect(SnapCoordinates.quartzPoint(fromAppKit: SnapCoordinates.appKitPoint(fromQuartz: CGPoint(x: 3, y: 7),
+                                                                                   menuBarTopY: scTopY),
+                                           menuBarTopY: scTopY) == CGPoint(x: 3, y: 7),
+               "the point conversion is its own inverse, which is what makes one helper enough")
+
         // MARK: Window move and resize gestures
 
         expect(WindowGestureSupport.modifiers(from: nil) == [.control, .command],
