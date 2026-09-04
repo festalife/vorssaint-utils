@@ -897,7 +897,16 @@ final class AppSwitcher: ObservableObject {
                                                        focusedWindowID: focusedSourceWindowID,
                                                        items: windows)
 
-        let list = orderedForSession(windows, currentID: source?.id)
+        // Spec §7/§12: clusters a window's Snap Group peers next to it
+        // before the "current window first" reorder below runs — the two
+        // are independent (this only changes relative order among the
+        // rest), and the front-load below still wins the very first slot.
+        let groupedWindows = UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapGroupsInDock)
+            ? SwitcherSupport.groupedBySnapGroup(windows) { windowID in
+                Set(WindowLayoutService.shared.snapGroupPeers(of: windowID)?.map(\.windowID) ?? [])
+            }
+            : windows
+        let list = orderedForSession(groupedWindows, currentID: source?.id)
         guard let pending = routeLock.withLock({ () -> SwitcherPendingSessionStart? in
             guard SwitcherSupport.isCurrentSessionStart(
                 generation: generation,

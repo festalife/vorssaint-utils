@@ -355,6 +355,7 @@ struct Strings {
     let dockPreviewDockUnavailable: String
     let dockPreviewAutohideBeta: String
     let dockPreviewOpenWindow: String
+    let dockPreviewShowGroup: String
     let dockPreviewCloseWindow: String
     let dockPreviewMinimizeWindow: String
     let dockPreviewRestoreWindow: String
@@ -1374,6 +1375,7 @@ extension Strings {
         dockPreviewDockUnavailable: "Não foi possível ler os itens do Dock.",
         dockPreviewAutohideBeta: "Beta. Você pode encontrar alguns bugs.",
         dockPreviewOpenWindow: "Abrir janela",
+        dockPreviewShowGroup: "Mostrar grupo",
         dockPreviewCloseWindow: "Fechar janela",
         dockPreviewMinimizeWindow: "Minimizar janela",
         dockPreviewRestoreWindow: "Restaurar janela",
@@ -2366,6 +2368,7 @@ extension Strings {
         dockPreviewDockUnavailable: "Could not read Dock items.",
         dockPreviewAutohideBeta: "Beta. You may run into some bugs.",
         dockPreviewOpenWindow: "Open window",
+        dockPreviewShowGroup: "Show group",
         dockPreviewCloseWindow: "Close window",
         dockPreviewMinimizeWindow: "Minimize window",
         dockPreviewRestoreWindow: "Restore window",

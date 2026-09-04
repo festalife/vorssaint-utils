@@ -598,6 +598,10 @@ enum DefaultsKey {
     // Spec §1's last row: dragging a snapped member away by its title bar
     // restores its pre-snap size. See `SnapRestoreOnDragSupport`.
     static let windowSnapRestoreSizeOnDrag = "windowSnapRestoreSizeOnDrag"
+    // Spec §7/§12: hovering a Dock icon of a Snap Group member offers
+    // "Show group" alongside its normal preview. See
+    // `WindowLayoutService.snapGroupPeers(of:)`.
+    static let windowSnapGroupsInDock = "windowSnapGroupsInDock"
     static let windowGestureEnabled = "windowGestureEnabled"
     static let windowGestureModifiers = "windowGestureModifiers"
     static let windowGestureRaiseWindow = "windowGestureRaiseWindow"
@@ -1335,6 +1339,10 @@ enum Defaults {
         // ever fires once a real Snap Group member is actually dragged off
         // its zone, so it never surfaces new behavior by itself.
         DefaultsKey.windowSnapRestoreSizeOnDrag: true,
+        // On by default, matching Windows' own "Show my snapped windows..."
+        // setting; it only ever changes anything once a real Snap Group
+        // with more than one member already exists.
+        DefaultsKey.windowSnapGroupsInDock: true,
         DefaultsKey.windowGestureEnabled: false,
         DefaultsKey.windowGestureModifiers: WindowGestureSupport.defaultModifierStorageValue,
         DefaultsKey.windowGestureRaiseWindow: false,

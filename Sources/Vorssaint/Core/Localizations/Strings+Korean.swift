@@ -240,6 +240,7 @@ extension Strings {
         dockPreviewDockUnavailable: "Dock 항목을 읽을 수 없습니다.",
         dockPreviewAutohideBeta: "베타 기능입니다. 일부 문제가 남아 있을 수 있습니다.",
         dockPreviewOpenWindow: "윈도우 열기",
+        dockPreviewShowGroup: "그룹 표시",
         dockPreviewCloseWindow: "윈도우 닫기",
         dockPreviewMinimizeWindow: "윈도우 최소화",
         dockPreviewRestoreWindow: "윈도우 복원",

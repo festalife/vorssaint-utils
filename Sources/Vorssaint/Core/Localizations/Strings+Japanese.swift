@@ -239,6 +239,7 @@ extension Strings {
         dockPreviewDockUnavailable: "Dock の項目を読み取れませんでした。",
         dockPreviewAutohideBeta: "ベータ版です。一部の不具合が残っている場合があります。",
         dockPreviewOpenWindow: "ウインドウを開く",
+        dockPreviewShowGroup: "グループを表示",
         dockPreviewCloseWindow: "ウインドウを閉じる",
         dockPreviewMinimizeWindow: "ウインドウをしまう",
         dockPreviewRestoreWindow: "ウインドウを戻す",

@@ -239,6 +239,7 @@ extension Strings {
         dockPreviewDockUnavailable: "Dock öğeleri okunamadı.",
         dockPreviewAutohideBeta: "Beta. Bazı hatalarla karşılaşabilirsin.",
         dockPreviewOpenWindow: "Pencereyi aç",
+        dockPreviewShowGroup: "Grubu göster",
         dockPreviewCloseWindow: "Pencereyi kapat",
         dockPreviewMinimizeWindow: "Pencereyi küçült",
         dockPreviewRestoreWindow: "Pencereyi geri yükle",

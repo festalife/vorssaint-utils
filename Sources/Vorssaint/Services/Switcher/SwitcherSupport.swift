@@ -429,6 +429,45 @@ enum SwitcherSupport {
         }
     }
 
+    /// Spec §7/§12 (`windowSnapGroupsInDock`, "Show my snapped windows...
+    /// when I press Alt+Tab"): reorders `items` so a window's Snap Group
+    /// peers move immediately after it, wherever it already sits — a group
+    /// can span more than one app, so this runs over the whole session list,
+    /// not per app the way `expandGroupedWindows` above groups by pid.
+    /// `peers` maps a window to the other members of its own group (empty
+    /// for a window that is not a multi-member group member at all);
+    /// pure, so the caller resolves that from `WindowLayoutService` and
+    /// this file never has to know about Snap Groups itself.
+    ///
+    /// A single left-to-right pass: each item is placed the first time it
+    /// is reached (skipped if some earlier item already pulled it in as a
+    /// peer), and, right after placing it, every one of its still-unplaced
+    /// peers is pulled in immediately, in their own original relative
+    /// order — so a window with no group peers never moves at all, and a
+    /// three-or-more-member group still ends up contiguous regardless of
+    /// which member the pass reaches first.
+    static func groupedBySnapGroup(_ items: [SwitcherItem],
+                                   peers: (CGWindowID) -> Set<CGWindowID>) -> [SwitcherItem] {
+        var placed: Set<CGWindowID> = []
+        var result: [SwitcherItem] = []
+        result.reserveCapacity(items.count)
+        for item in items {
+            if let windowID = item.windowID, placed.contains(windowID) { continue }
+            result.append(item)
+            guard let windowID = item.windowID else { continue }
+            placed.insert(windowID)
+            let group = peers(windowID)
+            guard !group.isEmpty else { continue }
+            for other in items {
+                guard let otherID = other.windowID, group.contains(otherID), !placed.contains(otherID)
+                else { continue }
+                result.append(other)
+                placed.insert(otherID)
+            }
+        }
+        return result
+    }
+
     static func shouldPausePreviewCapture(frontmostBundleIdentifier: String?,
                                           excludedBundleIdentifiers: [String]) -> Bool {
         guard let frontmostBundleIdentifier else { return false }

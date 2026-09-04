@@ -273,7 +273,9 @@ extension WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "가장자리에 닿기 전에 미리 붙이기",
         snapEarlyEdgeCaption: "포인터가 화면 가장자리에서 조금만 떨어져 있어도 절반/모서리 배치가 시작됩니다.",
         snapRestoreSizeEnable: "끌어서 떼면 원래 크기로 복원",
-        snapRestoreSizeCaption: "붙인 창을 제목 표시줄로 끌어서 떼면 붙이기 전 크기로 돌아가며, 포인터 아래 위치를 유지합니다."
+        snapRestoreSizeCaption: "붙인 창을 제목 표시줄로 끌어서 떼면 붙이기 전 크기로 돌아가며, 포인터 아래 위치를 유지합니다.",
+        snapGroupsInDockEnable: "Dock 미리보기에서 그룹 표시",
+        snapGroupsInDockCaption: "붙인 창의 Dock 아이콘을 마우스 오른쪽 버튼으로 클릭하면 그룹의 다른 모든 창을 함께 표시하는 옵션이 나타납니다."
     )
 }
 
@@ -1258,6 +1260,8 @@ struct WindowLayoutFeatureStrings {
     let snapEarlyEdgeCaption: String
     let snapRestoreSizeEnable: String
     let snapRestoreSizeCaption: String
+    let snapGroupsInDockEnable: String
+    let snapGroupsInDockCaption: String
 
     static let enUS = WindowLayoutFeatureStrings(
         title: "Window layout",
@@ -1344,7 +1348,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Snap before reaching the edge",
         snapEarlyEdgeCaption: "Halves and corners activate a little before the pointer actually touches the screen edge.",
         snapRestoreSizeEnable: "Restore size when dragged away",
-        snapRestoreSizeCaption: "Dragging a snapped window away by its title bar returns it to the size it had before it was snapped, staying under the pointer."
+        snapRestoreSizeCaption: "Dragging a snapped window away by its title bar returns it to the size it had before it was snapped, staying under the pointer.",
+        snapGroupsInDockEnable: "Show groups in Dock preview",
+        snapGroupsInDockCaption: "Right-click a snapped window's Dock icon to offer showing every other window in its group too."
     )
 
     static let ptBR = WindowLayoutFeatureStrings(
@@ -1432,7 +1438,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Encaixar antes de chegar à borda",
         snapEarlyEdgeCaption: "Metades e cantos são ativados um pouco antes de o ponteiro tocar a borda da tela.",
         snapRestoreSizeEnable: "Restaurar o tamanho ao arrastar para fora",
-        snapRestoreSizeCaption: "Arrastar uma janela encaixada pela barra de título a devolve ao tamanho que tinha antes de ser encaixada, mantendo-a sob o ponteiro."
+        snapRestoreSizeCaption: "Arrastar uma janela encaixada pela barra de título a devolve ao tamanho que tinha antes de ser encaixada, mantendo-a sob o ponteiro.",
+        snapGroupsInDockEnable: "Mostrar grupos na pré-visualização do Dock",
+        snapGroupsInDockCaption: "Clique com o botão direito no ícone do Dock de uma janela encaixada para também oferecer mostrar as outras janelas do grupo."
     )
 
     static let tr = WindowLayoutFeatureStrings(
@@ -1520,7 +1528,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Kenara ulaşmadan önce yasla",
         snapEarlyEdgeCaption: "İşaretçi ekranın kenarına tam değmeden yarımlar ve köşeler etkinleşir.",
         snapRestoreSizeEnable: "Sürükleyince önceki boyuta dön",
-        snapRestoreSizeCaption: "Yaslanmış bir pencereyi başlık çubuğundan sürüklemek, işaretçinin altında kalarak yaslanmadan önceki boyutuna döndürür."
+        snapRestoreSizeCaption: "Yaslanmış bir pencereyi başlık çubuğundan sürüklemek, işaretçinin altında kalarak yaslanmadan önceki boyutuna döndürür.",
+        snapGroupsInDockEnable: "Dock önizlemesinde grupları göster",
+        snapGroupsInDockCaption: "Yaslanmış bir pencerenin Dock simgesine sağ tıklamak, gruptaki diğer tüm pencereleri de gösterme seçeneği sunar."
     )
 
     static let ru = WindowLayoutFeatureStrings(
@@ -1608,7 +1618,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Прилипание до достижения края",
         snapEarlyEdgeCaption: "Половины и углы активируются чуть раньше, чем указатель на самом деле коснётся края экрана.",
         snapRestoreSizeEnable: "Восстанавливать размер при перетаскивании",
-        snapRestoreSizeCaption: "Перетаскивание прикреплённого окна за заголовок возвращает ему размер, который был до прилипания, оставляя его под указателем."
+        snapRestoreSizeCaption: "Перетаскивание прикреплённого окна за заголовок возвращает ему размер, который был до прилипания, оставляя его под указателем.",
+        snapGroupsInDockEnable: "Показывать группы в превью Dock",
+        snapGroupsInDockCaption: "Щёлкните правой кнопкой значок прикреплённого окна в Dock, чтобы также показать остальные окна группы."
     )
 
     static let es = WindowLayoutFeatureStrings(
@@ -1696,7 +1708,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Ajustar antes de llegar al borde",
         snapEarlyEdgeCaption: "Las mitades y esquinas se activan un poco antes de que el puntero toque el borde de la pantalla.",
         snapRestoreSizeEnable: "Restaurar el tamaño al arrastrar",
-        snapRestoreSizeCaption: "Arrastrar una ventana ajustada por su barra de título le devuelve el tamaño que tenía antes de ajustarse, manteniéndola bajo el puntero."
+        snapRestoreSizeCaption: "Arrastrar una ventana ajustada por su barra de título le devuelve el tamaño que tenía antes de ajustarse, manteniéndola bajo el puntero.",
+        snapGroupsInDockEnable: "Mostrar grupos en la vista previa del Dock",
+        snapGroupsInDockCaption: "Haz clic derecho en el icono del Dock de una ventana ajustada para también mostrar las demás ventanas de su grupo."
     )
 
     static let de = WindowLayoutFeatureStrings(
@@ -1784,7 +1798,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Andocken, bevor der Rand erreicht ist",
         snapEarlyEdgeCaption: "Hälften und Ecken werden schon kurz bevor der Zeiger den Bildschirmrand berührt aktiviert.",
         snapRestoreSizeEnable: "Größe beim Wegziehen wiederherstellen",
-        snapRestoreSizeCaption: "Ein angedocktes Fenster an der Titelleiste wegzuziehen stellt seine Größe von vor dem Andocken wieder her und hält es dabei unter dem Zeiger."
+        snapRestoreSizeCaption: "Ein angedocktes Fenster an der Titelleiste wegzuziehen stellt seine Größe von vor dem Andocken wieder her und hält es dabei unter dem Zeiger.",
+        snapGroupsInDockEnable: "Gruppen in der Dock-Vorschau anzeigen",
+        snapGroupsInDockCaption: "Rechtsklick auf das Dock-Symbol eines angedockten Fensters bietet an, auch alle anderen Fenster seiner Gruppe zu zeigen."
     )
 
     static let fr = WindowLayoutFeatureStrings(
@@ -1872,7 +1888,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Ancrer avant d’atteindre le bord",
         snapEarlyEdgeCaption: "Les moitiés et les coins s’activent juste avant que le pointeur ne touche réellement le bord de l’écran.",
         snapRestoreSizeEnable: "Restaurer la taille en le faisant glisser",
-        snapRestoreSizeCaption: "Faire glisser une fenêtre ancrée par sa barre de titre lui redonne la taille qu’elle avait avant l’ancrage, tout en restant sous le pointeur."
+        snapRestoreSizeCaption: "Faire glisser une fenêtre ancrée par sa barre de titre lui redonne la taille qu’elle avait avant l’ancrage, tout en restant sous le pointeur.",
+        snapGroupsInDockEnable: "Afficher les groupes dans l’aperçu du Dock",
+        snapGroupsInDockCaption: "Un clic droit sur l’icône du Dock d’une fenêtre ancrée propose aussi d’afficher les autres fenêtres de son groupe."
     )
 
     static let it = WindowLayoutFeatureStrings(
@@ -1960,7 +1978,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "Aggancia prima di raggiungere il bordo",
         snapEarlyEdgeCaption: "Metà e angoli si attivano poco prima che il puntatore tocchi davvero il bordo dello schermo.",
         snapRestoreSizeEnable: "Ripristina le dimensioni se trascinata via",
-        snapRestoreSizeCaption: "Trascinare una finestra agganciata dalla barra del titolo le restituisce le dimensioni che aveva prima di essere agganciata, restando sotto il puntatore."
+        snapRestoreSizeCaption: "Trascinare una finestra agganciata dalla barra del titolo le restituisce le dimensioni che aveva prima di essere agganciata, restando sotto il puntatore.",
+        snapGroupsInDockEnable: "Mostra i gruppi nell'anteprima del Dock",
+        snapGroupsInDockCaption: "Fai clic destro sull'icona del Dock di una finestra agganciata per mostrare anche le altre finestre del suo gruppo."
     )
 
     static let ja = WindowLayoutFeatureStrings(
@@ -2048,7 +2068,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "端に到達する前にスナップする",
         snapEarlyEdgeCaption: "ポインタが画面の端に実際に触れる少し前に、半分や角の配置が有効になります。",
         snapRestoreSizeEnable: "ドラッグで離すと元のサイズに戻す",
-        snapRestoreSizeCaption: "スナップしたウィンドウをタイトルバーでドラッグして離すと、スナップ前のサイズに戻り、ポインタの下に留まります。"
+        snapRestoreSizeCaption: "スナップしたウィンドウをタイトルバーでドラッグして離すと、スナップ前のサイズに戻り、ポインタの下に留まります。",
+        snapGroupsInDockEnable: "Dockプレビューでグループを表示",
+        snapGroupsInDockCaption: "スナップしたウィンドウのDockアイコンを右クリックすると、同じグループの他のウィンドウもまとめて表示できます。"
     )
 
     static let zhHans = WindowLayoutFeatureStrings(
@@ -2136,7 +2158,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "靠近边缘时提前贴靠",
         snapEarlyEdgeCaption: "指针尚未真正碰到屏幕边缘时，半屏和角落布局就会提前启用。",
         snapRestoreSizeEnable: "拖离时恢复原始大小",
-        snapRestoreSizeCaption: "用标题栏把已贴靠的窗口拖离时，会恢复到贴靠前的大小，并保持在指针下方。"
+        snapRestoreSizeCaption: "用标题栏把已贴靠的窗口拖离时，会恢复到贴靠前的大小，并保持在指针下方。",
+        snapGroupsInDockEnable: "在 Dock 预览中显示群组",
+        snapGroupsInDockCaption: "右键点击已贴靠窗口的 Dock 图标，即可同时显示该群组中的其他窗口。"
     )
 
     static let zhTW = WindowLayoutFeatureStrings(
@@ -2224,7 +2248,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "靠近邊緣時提前貼齊",
         snapEarlyEdgeCaption: "指標尚未真正碰到螢幕邊緣時，半螢幕與角落配置就會提前啟用。",
         snapRestoreSizeEnable: "拖曳離開時還原大小",
-        snapRestoreSizeCaption: "用標題列把已貼齊的視窗拖曳離開時，會還原成貼齊前的大小，並保持在指標下方。"
+        snapRestoreSizeCaption: "用標題列把已貼齊的視窗拖曳離開時，會還原成貼齊前的大小，並保持在指標下方。",
+        snapGroupsInDockEnable: "在 Dock 預覽中顯示群組",
+        snapGroupsInDockCaption: "在已貼齊視窗的 Dock 圖示上按右鍵，即可同時顯示該群組中的其他視窗。"
     )
 
     static let zhHK = WindowLayoutFeatureStrings(
@@ -2312,7 +2338,9 @@ struct WindowLayoutFeatureStrings {
         snapEarlyEdgeEnable: "靠近邊緣時提前貼齊",
         snapEarlyEdgeCaption: "指標仲未真正掂到螢幕邊緣時，半螢幕同角落配置就會提前啟用。",
         snapRestoreSizeEnable: "拖曳離開時還原大小",
-        snapRestoreSizeCaption: "用標題列將已貼齊嘅視窗拖曳離開時，會還原返貼齊之前嘅大小，並保持喺指標下方。"
+        snapRestoreSizeCaption: "用標題列將已貼齊嘅視窗拖曳離開時，會還原返貼齊之前嘅大小，並保持喺指標下方。",
+        snapGroupsInDockEnable: "喺 Dock 預覽入面顯示群組",
+        snapGroupsInDockCaption: "喺已貼齊視窗嘅 Dock 圖示上按右鍵，就可以一齊顯示同一個群組嘅其他視窗。"
     )
 }
 

@@ -18,6 +18,7 @@ struct DockPreviewPanelView: View {
             onPreview: service.preview,
             onEndPreview: service.endPreview,
             onCommit: service.commit,
+            onCommitGroup: service.commitGroup,
             onCloseWindow: service.close,
             onToggleMinimized: service.toggleMinimized,
             onTogglePinned: service.togglePinned,
@@ -45,6 +46,7 @@ struct DockPreviewPinnedPanelView: View {
             onPreview: panel.preview,
             onEndPreview: panel.endPreview,
             onCommit: panel.commit,
+            onCommitGroup: panel.commitGroup,
             onCloseWindow: panel.close,
             onToggleMinimized: panel.toggleMinimized,
             onTogglePinned: panel.closePreviewPanel,
@@ -70,6 +72,7 @@ private struct DockPreviewPanelContent: View {
     let onPreview: (SwitcherItem) -> Void
     let onEndPreview: (SwitcherItem) -> Void
     let onCommit: (SwitcherItem) -> Void
+    let onCommitGroup: (SwitcherItem) -> Void
     let onCloseWindow: (SwitcherItem) -> Void
     let onToggleMinimized: (SwitcherItem) -> Void
     let onTogglePinned: () -> Void
@@ -84,6 +87,7 @@ private struct DockPreviewPanelContent: View {
     @State private var draggingWindowID: CGWindowID?
     @AppStorage(DefaultsKey.dockPreviewBackgroundOpacity) private var backgroundOpacity = 1.0
     @AppStorage(DefaultsKey.dockPreviewQuitAppOnClose) private var quitAppOnClose = false
+    @AppStorage(DefaultsKey.windowSnapGroupsInDock) private var snapGroupsInDock = true
 
     private var closeActionTitle: String {
         DockPreviewSupport.closeAction(quitAppOnClose: quitAppOnClose) == .quitApp
@@ -107,8 +111,14 @@ private struct DockPreviewPanelContent: View {
                                 isPanelPinned: isPinned,
                                 onTogglePinned: onTogglePinned,
                                 closeActionTitle: closeActionTitle,
+                                isSnapGroupMember: snapGroupsInDock && window.windowID.map {
+                                    WindowLayoutService.shared.snapGroupPeers(of: $0) != nil
+                                } ?? false,
                                 onCommit: {
                                     onCommit(window)
+                                },
+                                onCommitGroup: {
+                                    onCommitGroup(window)
                                 },
                                 onClose: {
                                     onCloseWindow(window)
@@ -364,7 +374,14 @@ private struct DockPreviewCard: View {
     let isPanelPinned: Bool
     let onTogglePinned: () -> Void
     let closeActionTitle: String
+    /// Spec §7/§12: whether this window belongs to a Snap Group with more
+    /// than one member right now — checked once per render rather than
+    /// carried on `SwitcherItem` itself, since group membership can change
+    /// between this card's last redraw and the next without anything else
+    /// about the window changing.
+    let isSnapGroupMember: Bool
     let onCommit: () -> Void
+    let onCommitGroup: () -> Void
     let onClose: () -> Void
     let onToggleMinimized: () -> Void
 
@@ -483,6 +500,13 @@ private struct DockPreviewCard: View {
             onCommit()
         } label: {
             Label(l10n.s.dockPreviewOpenWindow, systemImage: "macwindow")
+        }
+        if isSnapGroupMember {
+            Button {
+                onCommitGroup()
+            } label: {
+                Label(l10n.s.dockPreviewShowGroup, systemImage: "square.grid.2x2")
+            }
         }
         if !window.isFullscreen {
             Button {

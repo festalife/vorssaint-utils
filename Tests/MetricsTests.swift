@@ -6235,12 +6235,26 @@ struct MetricsTests {
                "pruning keeps a member Accessibility simply did not answer for this round — a real app " +
                "(Chrome, Finder, Electron) can be slower to answer than an in-process Cocoa window, and a " +
                "missed read alone is never proof the window is gone")
-        expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:], goneOrMinimized: [1]).members.isEmpty,
-               "pruning drops a member the caller has confirmed is gone or minimized")
+        expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:], gone: [1]).members.isEmpty,
+               "pruning drops a member the caller has confirmed gone")
         expect(SnapGroupSupport.pruned(group: sgGroup,
                                        currentFrames: [1: sgLeftZone],
-                                       goneOrMinimized: [1]).members.isEmpty,
-               "goneOrMinimized evicts even when a (stale) live frame is also present for the same round")
+                                       gone: [1]).members.isEmpty,
+               "gone evicts even when a (stale) live frame is also present for the same round")
+
+        // Spec §7: a minimized member is marked, never dropped, and stays
+        // exactly where it was — unlike `gone`, which always evicts.
+        let sgMinimizedResult = SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:], minimized: [1])
+        expect(sgMinimizedResult.members.count == 1 && sgMinimizedResult.members[0].isMinimized,
+               "a minimized member is kept, marked isMinimized, not evicted")
+        expect(sgMinimizedResult.members[0].frame == sgLeftMember.frame,
+               "a minimized member's stored zone is untouched — nothing to re-place while it stays minimized")
+        let sgUnminimizedResult = SnapGroupSupport.pruned(group: sgMinimizedResult, currentFrames: [1: sgLeftZone])
+        expect(sgUnminimizedResult.members.count == 1 && !sgUnminimizedResult.members[0].isMinimized,
+               "reading a live frame matching its own zone again clears isMinimized — un-minimizing restored " +
+               "the same frame, as macOS does on its own, so no extra re-placement was needed")
+        expect(SnapGroupSupport.pruned(group: sgGroup, currentFrames: [:], gone: [1], minimized: [1]).members.isEmpty,
+               "gone always wins over minimized, even if a caller somehow reports both for the same window")
         // Pruning has to be a "pay once" operation: WindowLayoutService
         // persists the pruned group back to its store the moment anything
         // is dropped, specifically so a member that cannot be resolved is
@@ -6407,6 +6421,30 @@ struct MetricsTests {
                == sgRightThirdZone,
                "a leftHalf neighbour grown to 700pt still falls short of a rightThird zone's own left edge " +
                "(the untouched centerThird sits between them), so the rightThird request is left unadjusted")
+
+        // Spec §8: a resolution change or reconnect recomputes each
+        // member's zone "in proportion" against the new screen.
+        let sgOldScreen = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let sgNewScreen = CGRect(x: 0, y: 0, width: 2400, height: 1600)
+        let sgReflowGroup = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 40, action: .leftHalf,
+                            frame: WindowLayoutGeometry.rect(for: .leftHalf, current: sgOldScreen,
+                                                             visibleFrame: sgOldScreen, windowGap: 0)),
+            SnapGroupMember(windowID: 41, action: .topRight,
+                            frame: WindowLayoutGeometry.rect(for: .topRight, current: sgOldScreen,
+                                                             visibleFrame: sgOldScreen, windowGap: 0)),
+        ])
+        let sgRelocated = SnapGroupSupport.relocatedZones(for: sgReflowGroup, newVisibleFrame: sgNewScreen, windowGap: 0)
+        expect(sgRelocated.count == 2, "one relocated zone per member, in member order")
+        expect(sgRelocated[0].windowID == 40
+               && sgRelocated[0].frame == CGRect(x: 0, y: 0, width: 1200, height: 1600),
+               "leftHalf on a doubled screen is still exactly the left half of it — the same fraction of a " +
+               "different size, not a naive pixel scale of the old rect")
+        expect(sgRelocated[1].windowID == 41
+               && sgRelocated[1].frame == CGRect(x: 1200, y: 800, width: 1200, height: 800),
+               "topRight on the new screen is still exactly its own quarter")
+        expect(SnapGroupSupport.relocatedZones(for: SnapGroup(screenID: 1), newVisibleFrame: sgNewScreen, windowGap: 0).isEmpty,
+               "an empty group relocates to nothing")
 
         // MARK: Snap Assist
 
@@ -11719,6 +11757,42 @@ struct MetricsTests {
                && Set(expandedCappedApps.map(\.pid)) == Set((1...24).map { pid_t($0) })
                && !expandedCappedApps.contains { $0.pid == 25 },
                "App Switcher expands every backing window without displacing a capped app")
+
+        // Spec §7/§12: Snap Group peers cluster together in the Switcher.
+        let ssgA = SwitcherItem.window(id: 1, title: "A", appName: "App 1", pid: 1, isOnScreen: true, frame: .zero)
+        let ssgB = SwitcherItem.window(id: 2, title: "B", appName: "App 2", pid: 2, isOnScreen: true, frame: .zero)
+        let ssgC = SwitcherItem.window(id: 3, title: "C", appName: "App 3", pid: 3, isOnScreen: true, frame: .zero)
+        let ssgD = SwitcherItem.window(id: 4, title: "D", appName: "App 4", pid: 4, isOnScreen: true, frame: .zero)
+        func ssgNoPeers(_ id: CGWindowID) -> Set<CGWindowID> { [] }
+        expect(SwitcherSupport.groupedBySnapGroup([ssgA, ssgB, ssgC, ssgD], peers: ssgNoPeers)
+                   .map(\.windowID) == [1, 2, 3, 4],
+               "no window in any multi-member group: the original order is untouched")
+
+        func ssgPeersACGroup(_ id: CGWindowID) -> Set<CGWindowID> {
+            switch id {
+            case 1: return [3]
+            case 3: return [1]
+            default: return []
+            }
+        }
+        expect(SwitcherSupport.groupedBySnapGroup([ssgA, ssgB, ssgC, ssgD], peers: ssgPeersACGroup)
+                   .map(\.windowID) == [1, 3, 2, 4],
+               "A and C (a two-member group spanning different apps) become adjacent, pulled to right after A " +
+               "(the first of the two the pass reaches); B and D, with no peers, keep their own relative order")
+
+        func ssgPeersThreeWay(_ id: CGWindowID) -> Set<CGWindowID> {
+            switch id {
+            case 2: return [4]
+            case 4: return [2]
+            default: return []
+            }
+        }
+        expect(SwitcherSupport.groupedBySnapGroup([ssgA, ssgB, ssgC, ssgD], peers: ssgPeersThreeWay)
+                   .map(\.windowID) == [1, 2, 4, 3],
+               "B and D cluster right after B; A and C, with no peers, are untouched and keep their own slots")
+        expect(SwitcherSupport.groupedBySnapGroup([], peers: ssgNoPeers).isEmpty,
+               "an empty session list groups to nothing")
+
         expect(SwitcherSupport.nextAppSelectionIndex(items: groupedSwitcherItems,
                                                      selectedIndex: 0,
                                                      delta: 1) == 2,

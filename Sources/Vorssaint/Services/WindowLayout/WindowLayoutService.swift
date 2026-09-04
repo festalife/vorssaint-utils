@@ -220,6 +220,7 @@ final class WindowLayoutService: ObservableObject {
 
     private init() {
         SessionActivity.shared.onChange { [weak self] _ in self?.syncWithPreferences() }
+        startObservingScreenParameters()
     }
 
     func syncWithPreferences() {
@@ -755,9 +756,15 @@ final class WindowLayoutService: ObservableObject {
         let snapshot = currentFrames(for: group, on: screen)
         let pruned = SnapGroupSupport.pruned(group: group,
                                              currentFrames: snapshot.frames,
-                                             goneOrMinimized: snapshot.goneOrMinimized,
+                                             gone: snapshot.gone,
+                                             minimized: snapshot.minimized,
                                              gap: WindowLayoutGaps.windowGap)
-        guard pruned.members.count != group.members.count else { return group }
+        // Not just a count comparison: spec §7's isMinimized mark can flip
+        // on a member without the group's size changing at all (minimizing
+        // or un-minimizing one of several members), and that mark still
+        // has to make it back into `snapGroups` for Dock Preview's "Show
+        // group" and the next `freeSpace` computation to see it.
+        guard pruned != group else { return group }
         if pruned.members.isEmpty {
             snapGroups.removeValue(forKey: screen.displayID)
         } else {
@@ -805,7 +812,8 @@ final class WindowLayoutService: ObservableObject {
                                                appliedFrame: appliedRect,
                                                preSnapSize: appKitFrame(fromAX: fallbackFrame).size,
                                                currentFrames: snapshot.frames,
-                                               goneOrMinimized: snapshot.goneOrMinimized,
+                                               gone: snapshot.gone,
+                                               minimized: snapshot.minimized,
                                                gap: WindowLayoutGaps.windowGap)
         if updated.members.isEmpty {
             snapGroups.removeValue(forKey: screen.displayID)
@@ -813,6 +821,115 @@ final class WindowLayoutService: ObservableObject {
             snapGroups[screen.displayID] = updated
         }
         syncLinkedResizeObservers()
+    }
+
+    // MARK: - Snap Group memory across screen changes (spec §8)
+
+    /// Started once, in `init()`, and never stopped: unlike an input tap,
+    /// listening for a screen reconfiguration costs nothing while idle, and
+    /// `reflowSnapGroupsForScreenChange()` itself already gates every real
+    /// action on the feature being available and Accessibility being
+    /// trusted, so there is nothing to suspend separately in `suspend()`.
+    private var screenParametersObserver: NSObjectProtocol?
+
+    private func startObservingScreenParameters() {
+        guard screenParametersObserver == nil else { return }
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleSnapGroupReflow()
+        }
+    }
+
+    /// `didChangeScreenParametersNotification` typically fires several
+    /// times in a burst for one physical event (a monitor waking, macOS
+    /// settling on a resolution) — coalesced the same way
+    /// `KeepAwakeManager`'s own screen-parameters handling is, with enough
+    /// delay that the new `NSScreen.screens` values have actually settled
+    /// before anything reads them.
+    private var snapGroupReflowScheduled = false
+
+    private func scheduleSnapGroupReflow() {
+        guard !snapGroupReflowScheduled else { return }
+        snapGroupReflowScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.snapGroupReflowScheduled = false
+            self?.reflowSnapGroupsForScreenChange()
+        }
+    }
+
+    /// Spec §8: recomputes and re-places every Snap Group after a display
+    /// reconfiguration (resolution change, connect, reconnect, arrangement
+    /// change). A group whose screen no longer exists at all (disconnected)
+    /// is simply dropped — there is no geometry left to recompute it
+    /// against, and Vorssaint does not persist a group across a display
+    /// actually going away and coming back in a later session, only within
+    /// one still-connected screen changing shape. A minimized member is
+    /// left alone (it has no on-screen position to write to right now);
+    /// spec §7's own un-minimize handling puts it back once it reappears.
+    private func reflowSnapGroupsForScreenChange() {
+        guard AppFeature.windowLayout.isAvailable, AXIsProcessTrusted() else { return }
+        for (displayID, group) in snapGroups {
+            guard let screen = NSScreen.screens.first(where: { $0.displayID == displayID }) else {
+                snapGroups.removeValue(forKey: displayID)
+                continue
+            }
+            let relocations = SnapGroupSupport.relocatedZones(for: group,
+                                                               newVisibleFrame: screen.visibleFrame,
+                                                               windowGap: WindowLayoutGaps.windowGap,
+                                                               screenGap: WindowLayoutGaps.screenGap)
+            var updatedGroup = group
+            for (windowID, rect) in relocations {
+                guard let index = updatedGroup.members.firstIndex(where: { $0.windowID == windowID }),
+                      !updatedGroup.members[index].isMinimized,
+                      rect != updatedGroup.members[index].frame,
+                      let actual = writeGroupMemberFrame(rect, windowID: windowID)
+                else { continue }
+                updatedGroup.members[index].frame = actual
+            }
+            if updatedGroup != group {
+                snapGroups[displayID] = updatedGroup
+            }
+        }
+        syncLinkedResizeObservers()
+    }
+
+    /// Writes `rect` (AppKit space) directly to `windowID`'s real window via
+    /// a freshly resolved `AXUIElement` — unlike `writeLinkedResizeFrame`,
+    /// this never requires an existing linked-resize observation, since a
+    /// screen reflow must move every Snap Group member regardless of
+    /// whether the separate Linked Resize toggle happens to be on for it.
+    /// Marks the same self-initiated-echo record `writeLinkedResizeFrame`
+    /// does, so a member that *is* also watched by linked resize never
+    /// mistakes this write for a fresh user drag the moment its own
+    /// notification arrives.
+    @discardableResult
+    private func writeGroupMemberFrame(_ rect: CGRect, windowID: CGWindowID) -> CGRect? {
+        guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements],
+                                                        kCGNullWindowID) as? [[String: Any]],
+              let info = windows.first(where: {
+                  ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID
+              }),
+              let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+        else { return nil }
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, Self.groupMemberMessagingTimeout)
+        guard let axWindow = axElement(windowID: windowID, in: axApp) else { return nil }
+        let axRect = axFrame(fromAppKit: rect)
+        var size = axRect.size
+        var origin = axRect.origin
+        if let sizeValue = AXValueCreate(.cgSize, &size) {
+            AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue)
+        }
+        if let positionValue = AXValueCreate(.cgPoint, &origin) {
+            AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, positionValue)
+        }
+        guard let actual = frame(of: axWindow) else { return nil }
+        let actualFrame = appKitFrame(fromAX: actual)
+        linkedResizeSelfInitiated[windowID] = (actualFrame, ProcessInfo.processInfo.systemUptime)
+        return actualFrame
     }
 
     /// Drops `windowID` from every Snap Group it might be in — used wherever
@@ -826,6 +943,38 @@ final class WindowLayoutService: ObservableObject {
             }
         }
         syncLinkedResizeObservers()
+    }
+
+    // MARK: - Snap Group in Dock Preview / Switcher (spec §7/§12)
+
+    /// Every other member of `windowID`'s Snap Group, each paired with its
+    /// owning pid — `DockPreviewService`'s "Show group" reads this to raise
+    /// them all. `nil` when `windowID` is not a group member at all, or is
+    /// the group's only member (nothing to "show" beyond the window
+    /// itself). Resolves each member's pid fresh from `CGWindowList` rather
+    /// than storing one on `SnapGroupMember`, matching every other lookup
+    /// in this file that needs a window's owner (`rawCurrentFrames`,
+    /// `writeGroupMemberFrame`): a pid can outlive the process that had it
+    /// (relaunched under a new one) between when a member joined and when
+    /// this is asked, so it is never worth caching.
+    func snapGroupPeers(of windowID: CGWindowID) -> [(windowID: CGWindowID, pid: pid_t)]? {
+        guard let group = snapGroups.values.first(where: { grp in grp.members.contains { $0.windowID == windowID } }),
+              group.members.count > 1,
+              let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements],
+                                                       kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        var ownerPIDs: [CGWindowID: pid_t] = [:]
+        for window in windows {
+            guard let id = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+                  let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+            else { continue }
+            ownerPIDs[id] = pid
+        }
+        let peers = group.members.compactMap { member -> (windowID: CGWindowID, pid: pid_t)? in
+            guard member.windowID != windowID, let pid = ownerPIDs[member.windowID] else { return nil }
+            return (member.windowID, pid)
+        }
+        return peers.isEmpty ? nil : peers
     }
 
     /// How long a cached `currentFrames(for:on:)` result stays usable.
@@ -875,17 +1024,19 @@ final class WindowLayoutService: ObservableObject {
     private static let groupMemberMessagingTimeout: Float = 0.35
 
     /// The result of one Accessibility sweep over a Snap Group's members:
-    /// `frames` for whichever ones answered with a usable frame, and
-    /// `goneOrMinimized` for the ones `SnapGroupSupport.pruned` should
-    /// actually evict for — confirmed absent from `CGWindowList` (closed)
-    /// or confirmed minimized. Everything else (present in `CGWindowList`,
-    /// not minimized, but Accessibility did not answer in time or answered
-    /// with nothing usable) is in neither set: not proof of anything except
-    /// that this one read did not land, so the member is kept and simply
-    /// contributes no edge to `freeSpace` this round.
+    /// `frames` for whichever ones answered with a usable frame; `gone` for
+    /// the ones confirmed absent from `CGWindowList` entirely (closed) —
+    /// `SnapGroupSupport.pruned` always evicts these; `minimized` for the
+    /// ones confirmed minimized — spec §7, `pruned` keeps and marks these
+    /// instead of evicting. Everything else (present in `CGWindowList`, not
+    /// minimized, but Accessibility did not answer in time or answered with
+    /// nothing usable) is in none of the three: not proof of anything
+    /// except that this one read did not land, so the member is kept
+    /// unmarked and simply contributes no edge to `freeSpace` this round.
     private struct GroupFrameSnapshot {
         var frames: [CGWindowID: CGRect] = [:]
-        var goneOrMinimized: Set<CGWindowID> = []
+        var gone: Set<CGWindowID> = []
+        var minimized: Set<CGWindowID> = []
     }
 
     /// Live frames for a Snap Group's members, read via Accessibility right
@@ -916,7 +1067,7 @@ final class WindowLayoutService: ObservableObject {
         for member in group.members {
             guard let pid = ownerPIDs[member.windowID] else {
                 // Not in CGWindowList at all under any owner: confirmed closed.
-                snapshot.goneOrMinimized.insert(member.windowID)
+                snapshot.gone.insert(member.windowID)
                 continue
             }
             let axApp = apps[pid] ?? {
@@ -931,7 +1082,7 @@ final class WindowLayoutService: ObservableObject {
             guard let axWindow = retrying({ axElement(windowID: member.windowID, in: axApp) })
             else { continue }
             if boolAttribute(axWindow, kAXMinimizedAttribute as String) {
-                snapshot.goneOrMinimized.insert(member.windowID)
+                snapshot.minimized.insert(member.windowID)
                 continue
             }
             guard let frame = retrying({ frame(of: axWindow) }) else { continue }

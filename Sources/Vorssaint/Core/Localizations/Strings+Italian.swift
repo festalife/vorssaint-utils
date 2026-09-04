@@ -239,6 +239,7 @@ extension Strings {
         dockPreviewDockUnavailable: "Impossibile leggere gli elementi del Dock.",
         dockPreviewAutohideBeta: "Beta. Potresti riscontrare alcuni bug.",
         dockPreviewOpenWindow: "Apri finestra",
+        dockPreviewShowGroup: "Mostra gruppo",
         dockPreviewCloseWindow: "Chiudi finestra",
         dockPreviewMinimizeWindow: "Riduci finestra",
         dockPreviewRestoreWindow: "Ripristina finestra",

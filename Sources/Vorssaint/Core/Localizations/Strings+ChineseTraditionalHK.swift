@@ -240,6 +240,7 @@ extension Strings {
         dockPreviewDockUnavailable: "無法讀取 Dock 項目。",
         dockPreviewAutohideBeta: "測試版。你可能會遇到一些問題。",
         dockPreviewOpenWindow: "開啟視窗",
+        dockPreviewShowGroup: "顯示群組",
         dockPreviewCloseWindow: "關閉視窗",
         dockPreviewMinimizeWindow: "最小化視窗",
         dockPreviewRestoreWindow: "還原視窗",

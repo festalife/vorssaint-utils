@@ -169,6 +169,29 @@ final class DockPreviewService: ObservableObject {
         WindowActivator.activate(item)
     }
 
+    /// Spec §7/§12: "Show group" — raises every other member of `item`'s
+    /// Snap Group first, then `item` itself last so it ends up frontmost,
+    /// matching what a person hovering that one Dock icon actually asked
+    /// for. Unlike `commit`, `item` need not already be in `windows` (a
+    /// group can span more than one app, so a peer can easily live outside
+    /// whatever this one Dock icon's own preview is showing) — falls back
+    /// to a plain `commit` whenever `item` is not a multi-member Snap Group
+    /// member at all, so callers can wire this in unconditionally.
+    func commitGroup(_ item: SwitcherItem) {
+        guard let windowID = item.windowID,
+              UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapGroupsInDock),
+              let peers = WindowLayoutService.shared.snapGroupPeers(of: windowID)
+        else {
+            commit(item)
+            return
+        }
+        endSession()
+        for peer in peers {
+            WindowActivator.activate(pid: peer.pid, windowID: peer.windowID, appName: "")
+        }
+        WindowActivator.activate(item)
+    }
+
     func closePreviewPanel() {
         guard isVisible else { return }
         endSession()
@@ -1461,6 +1484,23 @@ final class DockPreviewPinnedPanel: ObservableObject, Identifiable {
     func commit(_ item: SwitcherItem) {
         guard windows.contains(item) else { return }
         selectedWindowID = item.windowID
+        WindowActivator.activate(item)
+    }
+
+    /// See `DockPreviewService.commitGroup(_:)` — same "Show group"
+    /// behavior for a pinned panel's own copy of the session.
+    func commitGroup(_ item: SwitcherItem) {
+        guard let windowID = item.windowID,
+              UserDefaults.standard.bool(forKey: DefaultsKey.windowSnapGroupsInDock),
+              let peers = WindowLayoutService.shared.snapGroupPeers(of: windowID)
+        else {
+            commit(item)
+            return
+        }
+        selectedWindowID = item.windowID
+        for peer in peers {
+            WindowActivator.activate(pid: peer.pid, windowID: peer.windowID, appName: "")
+        }
         WindowActivator.activate(item)
     }
 

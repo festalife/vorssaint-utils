@@ -24,6 +24,11 @@ struct SnapGroupMember: Equatable {
     /// without one; every member `WindowLayoutService` actually creates has
     /// one, since `updateSnapGroup` always supplies the pre-placement frame.
     var restoreSize: CGSize? = nil
+    /// Spec §7: a minimized member is never dropped from its group — it is
+    /// marked instead, so it can be put back in its own zone once
+    /// un-minimized (which, on macOS, restores the exact frame it had
+    /// before minimizing on its own — see `pruned(...)`'s own doc comment).
+    var isMinimized: Bool = false
 }
 
 /// The windows currently snapped together on one screen. Vorssaint keeps one
@@ -173,38 +178,56 @@ enum SnapGroupSupport {
     }
 
     /// The group with every member dropped that is *confirmed* gone —
-    /// `WindowLayoutService` puts a windowID in `goneOrMinimized` only when
-    /// the window no longer appears in `CGWindowList` at all, or reads back
-    /// minimized — or that has drifted off its own zone (`stillAnchored`
-    /// fails — the user moved it). A member simply missing from
-    /// `currentFrames` without being in `goneOrMinimized` is *kept*: an
-    /// Accessibility read that timed out or came back empty this one round
-    /// is not proof the window is gone — real apps (Chrome, Finder, an
-    /// Electron app) routinely answer slower than an in-process Cocoa
-    /// window does, especially while occupied doing something else, and
-    /// evicting on the first slow read was the bug behind a member
-    /// vanishing moments after joining. A kept-but-frame-missing member
-    /// simply contributes nothing to `freeSpace` this round; it tries again
-    /// next time this group is consulted. Called before every free-space
-    /// computation and every membership update, so a truly stale member is
-    /// never more than one placement or one drag sample away from being
-    /// forgotten.
+    /// `WindowLayoutService` puts a windowID in `gone` only when the window
+    /// no longer appears in `CGWindowList` at all — or that has drifted off
+    /// its own zone (`stillAnchored` fails — the user moved it, or, spec
+    /// §7's carve-out, `SnapRestoreOnDragSupport` already handled it as a
+    /// drag-away). A member in `minimized` is never dropped either way: it
+    /// is marked `isMinimized` instead and kept exactly where it is, since
+    /// minimizing never actually moves a window's frame — un-minimizing it
+    /// (macOS restoring that same frame on its own) reads back
+    /// `stillAnchored` again on the very next round and simply clears the
+    /// mark, with no extra re-placement needed for the common case; spec
+    /// §8's screen-change handling covers the rest (a display gone or
+    /// resized while a member was minimized).
+    ///
+    /// A member simply missing from `currentFrames` without being in either
+    /// `gone` or `minimized` is *kept*, mark unchanged: an Accessibility
+    /// read that timed out or came back empty this one round is not proof
+    /// of anything — real apps (Chrome, Finder, an Electron app) routinely
+    /// answer slower than an in-process Cocoa window does, especially while
+    /// occupied doing something else, and evicting on the first slow read
+    /// was the bug behind a member vanishing moments after joining. A
+    /// kept-but-frame-missing member simply contributes nothing to
+    /// `freeSpace` this round; it tries again next time this group is
+    /// consulted. Called before every free-space computation and every
+    /// membership update, so a truly stale member is never more than one
+    /// placement or one drag sample away from being forgotten.
     static func pruned(group: SnapGroup,
                        currentFrames: [CGWindowID: CGRect],
-                       goneOrMinimized: Set<CGWindowID> = [],
+                       gone: Set<CGWindowID> = [],
+                       minimized: Set<CGWindowID> = [],
                        gap: CGFloat = 0) -> SnapGroup {
         var result = group
-        result.members = group.members.filter { member in
-            guard !goneOrMinimized.contains(member.windowID) else { return false }
-            guard let current = currentFrames[member.windowID] else { return true }
-            return stillAnchored(member: member, currentFrame: current, gap: gap)
+        result.members = group.members.compactMap { member -> SnapGroupMember? in
+            guard !gone.contains(member.windowID) else { return nil }
+            if minimized.contains(member.windowID) {
+                var minimizedMember = member
+                minimizedMember.isMinimized = true
+                return minimizedMember
+            }
+            guard let current = currentFrames[member.windowID] else { return member }
+            guard stillAnchored(member: member, currentFrame: current, gap: gap) else { return nil }
+            var visibleMember = member
+            visibleMember.isMinimized = false
+            return visibleMember
         }
         return result
     }
 
     /// The group after one more placement: `windowID` is removed from its
     /// old slot (if any) first, every other member is pruned by the same
-    /// rules `pruned(group:currentFrames:goneOrMinimized:gap:)` applies, and
+    /// rules `pruned(group:currentFrames:gone:minimized:gap:)` applies, and
     /// `windowID` rejoins with its new zone only when `action` is one that
     /// joins a group at all — maximizing, restoring, going full screen,
     /// centering or crossing to another display all simply drop the window
@@ -222,10 +245,11 @@ enum SnapGroupSupport {
                         appliedFrame: CGRect,
                         preSnapSize: CGSize,
                         currentFrames: [CGWindowID: CGRect],
-                        goneOrMinimized: Set<CGWindowID> = [],
+                        gone: Set<CGWindowID> = [],
+                        minimized: Set<CGWindowID> = [],
                         gap: CGFloat = 0) -> SnapGroup {
         let existingRestoreSize = group.members.first { $0.windowID == windowID }?.restoreSize
-        var result = pruned(group: group, currentFrames: currentFrames, goneOrMinimized: goneOrMinimized, gap: gap)
+        var result = pruned(group: group, currentFrames: currentFrames, gone: gone, minimized: minimized, gap: gap)
         result.members.removeAll { $0.windowID == windowID }
         if joinsGroup(action) {
             let restoreSize = existingRestoreSize ?? preSnapSize
@@ -338,5 +362,31 @@ enum SnapGroupSupport {
         let result = CGRect(x: minX, y: minY, width: max(0, maxX - minX), height: max(0, maxY - minY))
         guard result.width >= minimumSpace, result.height >= minimumSpace else { return theoreticalZone }
         return result
+    }
+
+    /// Spec §8: a resolution change or a display reconnecting recalculates
+    /// every member's zone "in proportion" and re-places the group. Every
+    /// `WindowLayoutAction` a member can join a group with is already
+    /// resolution-independent — a fraction of the screen's visible frame,
+    /// computed by `WindowLayoutGeometry.rect` — so "in proportion" falls
+    /// out for free by simply re-deriving each member's rect from its own
+    /// unchanged `action` against `newVisibleFrame`; nothing here needs its
+    /// own pixel-proportional math. Returns each member's new theoretical
+    /// rect in the group's own member order; the caller writes it to the
+    /// real window and, on success, updates that member's stored `frame` to
+    /// match — this function only computes, it never touches a live
+    /// member or a window.
+    static func relocatedZones(for group: SnapGroup,
+                               newVisibleFrame: CGRect,
+                               windowGap: CGFloat,
+                               screenGap: CGFloat = 0) -> [(windowID: CGWindowID, frame: CGRect)] {
+        group.members.map { member in
+            let rect = WindowLayoutGeometry.rect(for: member.action,
+                                                 current: newVisibleFrame,
+                                                 visibleFrame: newVisibleFrame,
+                                                 windowGap: windowGap,
+                                                 screenGap: screenGap)
+            return (member.windowID, rect.integral)
+        }
     }
 }

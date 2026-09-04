@@ -239,6 +239,7 @@ extension Strings {
         dockPreviewDockUnavailable: "无法读取 Dock 项目。",
         dockPreviewAutohideBeta: "测试版。你可能会遇到一些错误。",
         dockPreviewOpenWindow: "打开窗口",
+        dockPreviewShowGroup: "显示群组",
         dockPreviewCloseWindow: "关闭窗口",
         dockPreviewMinimizeWindow: "最小化窗口",
         dockPreviewRestoreWindow: "恢复窗口",

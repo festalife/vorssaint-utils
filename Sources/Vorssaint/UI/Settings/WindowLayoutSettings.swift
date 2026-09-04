@@ -35,6 +35,7 @@ struct WindowLayoutSettings: View {
     // mirrored here because it is a window-juggling behavior people look for
     // on this page too.
     @AppStorage(DefaultsKey.dockClickCycleWindows) private var dockClickCycleWindows = false
+    @AppStorage(DefaultsKey.windowSnapGroupsInDock) private var snapGroupsInDockEnabled = true
 
     private var text: WindowLayoutFeatureStrings {
         FeatureStrings.windowLayout(l10n.language)
@@ -216,6 +217,13 @@ struct WindowLayoutSettings: View {
                         DockClickService.shared.syncWithPreferences()
                     }
                 Text(l10n.s.dockClickCycleWindowsCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                // No onChange/syncWithPreferences call: read fresh every
+                // time a Dock preview card's context menu is built, never a
+                // tap of its own.
+                Toggle(text.snapGroupsInDockEnable, isOn: $snapGroupsInDockEnabled)
+                Text(text.snapGroupsInDockCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

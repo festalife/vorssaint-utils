@@ -240,6 +240,7 @@ extension Strings {
         dockPreviewDockUnavailable: "Не удалось прочитать элементы Dock.",
         dockPreviewAutohideBeta: "Бета. Возможны ошибки.",
         dockPreviewOpenWindow: "Открыть окно",
+        dockPreviewShowGroup: "Показать группу",
         dockPreviewCloseWindow: "Закрыть окно",
         dockPreviewMinimizeWindow: "Свернуть окно",
         dockPreviewRestoreWindow: "Восстановить окно",
