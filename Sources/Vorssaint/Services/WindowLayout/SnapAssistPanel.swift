@@ -3,158 +3,71 @@
 
 import AppKit
 import Carbon.HIToolbox
-import SwiftUI
 
-/// The state the SwiftUI overlay reflects: which windows to offer, their
-/// thumbnails as they stream in, and the hint text under the title. The
-/// event tap and Accessibility work all happen in `WindowLayoutService` and
-/// `SnapAssistPanel`; the view only ever reads this, per "UI observes
-/// services" (`CONTRIBUTING.md`).
-final class SnapAssistPanelState: ObservableObject {
-    @Published var items: [SwitcherItem] = []
-    @Published var previews: [CGWindowID: CGImage] = [:]
-    @Published var hint: String = ""
-    /// The fixed column count the panel's own frame was sized for
-    /// (`SnapAssistPanel.layout`). The view uses this exact number rather
-    /// than an adaptive grid, so the space the panel reserves and the grid
-    /// it draws can never disagree.
-    @Published var columns: Int = 1
-    var onSelect: ((SwitcherItem) -> Void)?
-}
-
-/// Borderless panels refuse key status by default; Esc needs it, and
-/// `.nonactivatingPanel` already keeps `makeKey()` here from activating
-/// Vorssaint itself or taking focus from the window that was just snapped —
-/// the same trade RadialMenuService's `KeyableWheelPanel` makes.
+/// Borderless panels refuse key status by default, and this one genuinely
+/// needs it — see `SnapAssistPanel`'s own doc comment for why a real
+/// clickable panel needs a real key, activated window.
 private final class KeyableSnapAssistPanel: NSPanel {
     override var canBecomeKey: Bool { true }
-}
-
-/// Owns the click, computed directly against the grid geometry instead of
-/// through a SwiftUI `Button` or an `NSViewRepresentable` card catcher.
-///
-/// Real-Mac testing tried both: a plain `Button` never fired reliably in
-/// this non-activating, momentarily-not-key panel (spec §4 requires it stay
-/// non-activating), and swapping it for a per-card `NSViewRepresentable`
-/// overlay didn't help either — `NSHostingView`'s own `hitTest` resolves to
-/// *itself* for the whole content area regardless of what SwiftUI draws
-/// underneath, so a nested representable view is never actually the AppKit
-/// hit-test target a click resolves to; only this outermost view's own
-/// `mouseDown`/`mouseUp` ever fire. So this is the one place the click is
-/// definitely delivered, and hit-testing which card it landed on is done
-/// right here with the same pure geometry (`SnapAssistSupport.cellFrames`)
-/// the SwiftUI grid is conceptually laid out with — no dependency on
-/// SwiftUI's own view tree receiving or routing the event at all.
-///
-/// `acceptsFirstMouse` matters for the same reason every other genuinely
-/// clickable panel in this codebase overrides it (`CommandBarView`,
-/// `ClipboardHistoryService`, `ScratchpadView`, `ShelfTilesView`, …): a
-/// non-activating, momentarily-not-key panel must still process the very
-/// first click after it appears, not spend that click only bringing itself
-/// forward.
-private final class SnapAssistHostingView: NSHostingView<SnapAssistPanelView> {
-    // `rootView.state` rather than a separately stored property: NSHostingView
-    // already requires `init(rootView:)` as its designated initializer
-    // (`required`), and `SnapAssistPanelView` already carries the same state
-    // object hit-testing needs, so there is no reason to duplicate it.
-    private var panelState: SnapAssistPanelState { rootView.state }
-    private var isPressed = false
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        isPressed = true
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        // Dragging off the panel before releasing cancels the click,
-        // matching a normal button's behavior.
-        isPressed = isPressed && bounds.contains(convert(event.locationInWindow, from: nil))
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        defer { isPressed = false }
-        guard isPressed else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        guard bounds.contains(point), let index = cardIndex(at: point) else { return }
-        guard panelState.items.indices.contains(index) else { return }
-        panelState.onSelect?(panelState.items[index])
-    }
-
-    /// Which card, if any, contains `point` — `point` in this view's own
-    /// (unflipped, bottom-left origin) AppKit coordinates, converted to the
-    /// top-left/row-major space `SnapAssistSupport.cellFrames` computes in,
-    /// which is the same space the SwiftUI grid's cards are conceptually
-    /// laid out in (`SnapAssistPanelView`'s `LazyVGrid`, top row first).
-    private func cardIndex(at point: NSPoint) -> Int? {
-        let topLeftPoint = CGPoint(x: point.x, y: bounds.height - point.y)
-        let frames = SnapAssistSupport.cellFrames(count: panelState.items.count,
-                                                  columns: max(1, panelState.columns),
-                                                  itemSize: SnapAssistPanel.itemSize,
-                                                  spacing: SnapAssistPanel.spacing,
-                                                  padding: SnapAssistPanel.padding)
-        return frames.firstIndex { $0.contains(topLeftPoint) }
-    }
+    override var canBecomeMain: Bool { true }
 }
 
 /// Owns the floating Snap Assist overlay on `WindowLayoutService`'s behalf
 /// (spec §4): a dark translucent surface covering the free zone a snap just
-/// left, filled with thumbnails of the other open windows. Unlike
-/// `SnapLayoutsPanel` — which only ever draws a highlight while the existing
-/// drag tap tracks hover and release — this panel is genuinely clickable:
-/// there is no drag in progress once a placement has already landed, so
-/// `SnapAssistHostingView`'s own `mouseDown`/`mouseUp` handle the pick
-/// directly (see its doc comment for why not a SwiftUI `Button`).
+/// left, filled with thumbnails of the other open windows, each a genuine
+/// `NSButton` — a real `AXButton` with a real `AXPress` action.
+///
+/// This panel activates Vorssaint and takes real key status while it is
+/// open, unlike `SnapLayoutsPanel` (which only ever draws a highlight while
+/// the existing drag tap owns hover and release, and deliberately never
+/// activates anything). Two earlier versions of both this panel and its
+/// content tried to avoid that: a `.nonactivatingPanel` with `makeKey()`
+/// plus a plain SwiftUI `Button`, and then the same panel with a hand-rolled
+/// `NSView` hit test once the `Button` proved unreliable. Both passed a
+/// synthetic-coordinate test harness, but Marco's own trackpad clicks on a
+/// real Mac still selected nothing. A screenshot-driven re-test (real
+/// clicks landing dead-center on a visible card) confirmed it was not a
+/// geometry problem: the panel's owning app was never actually becoming the
+/// frontmost application — `NSApp.activate(ignoringOtherApps:)` called from
+/// deep inside an event-tap-driven call chain, for an `LSUIElement`
+/// accessory app with no Dock presence, did not reliably transfer real
+/// activation the way it does for a menu-bar shortcut's own direct handler
+/// (`CommandBarService`, `ScratchpadService`). Without genuine activation, a
+/// SwiftUI `Button`'s tap gesture — and, this rework found, that dependency
+/// runs deeper than SwiftUI — never reliably fires for a real trackpad
+/// click, only for `AXUIElementPerformAction`, which bypasses window-server
+/// click delivery entirely. `SnapAssistContentView` (`SnapAssistPanelView.
+/// swift`) replaces the whole SwiftUI tree with plain `NSButton`s instead,
+/// whose click handling is native AppKit and does not depend on the owning
+/// app being frontmost at all — only on the window being key, which
+/// `makeKeyAndOrderFront` already grants a non-activating panel on its own.
+/// Snap Assist is a modal-ish picker exactly like Windows' own — briefly
+/// taking focus while it is open is acceptable (spec §4) even where it
+/// turns out not to be load-bearing for the click itself — and
+/// `WindowLayoutService` activates the placed window's app again right
+/// after a pick, so focus lands where the person would expect it to next.
 final class SnapAssistPanel {
     private var panel: KeyableSnapAssistPanel?
-    private let state = SnapAssistPanelState()
+    private var contentView: SnapAssistContentView?
     private var keyMonitor: Any?
-    private var localClickMonitor: Any?
-    private var outsideClickMonitor: Any?
-    private var activationObserver: NSObjectProtocol?
+    private var resignKeyObserver: NSObjectProtocol?
     private var screenParametersObserver: NSObjectProtocol?
     private var dismissTimer: Timer?
-    /// Set right before `WindowLayoutService` activates a candidate's app
-    /// itself, so the `didActivateApplicationNotification`(s) that
-    /// activation posts are not mistaken for the person switching away —
-    /// which would otherwise close the overlay (and defeat "try another
-    /// window" on a failed placement, spec §4 point 4) the instant a pick
-    /// is made, before the placement it triggered even has a result yet.
-    /// A time window, not a one-shot flag: real-Mac testing found the very
-    /// first pick closing the overlay before its placement even ran, which
-    /// a single "ignore exactly the next notification" flag cannot protect
-    /// against if more than one activation-related notification arrives
-    /// (the app itself, then one of its windows, in either order) — every
-    /// notification inside the window is ignored instead.
-    private var suppressActivationDismissUntil: TimeInterval = 0
-    private static let activationSuppressionWindow: TimeInterval = 1.0
-    /// The app that owns the window `show` was just called for — the one
-    /// that started this whole placement, by dragging its own title bar or
-    /// otherwise. That drag or shortcut can itself activate the app (it may
-    /// not have been frontmost to begin with), and that activation
-    /// notification is not guaranteed to arrive before `show` — on a real
-    /// Mac it arrived just after, and with no suppression armed yet at
-    /// panel-open time (only `ignoreNextAppActivation`, called before a
-    /// *candidate pick*, ever armed one) it read as the person switching
-    /// away and closed the overlay within about a second of it appearing.
-    /// This app's own activation is therefore never treated as a dismissal
-    /// at all, for as long as it stays the current owner (until the next
-    /// `show` names a different one).
-    private var ignoredOwnerPID: pid_t?
-    /// Belt and suspenders alongside `ignoredOwnerPID`: no activation of
-    /// *any* app is treated as a dismissal until the panel has been showing
-    /// this content for this long, so any other activation still settling
-    /// from the gesture that opened the overlay — not necessarily the
-    /// owner's — has time to arrive first.
-    private var dismissArmedAt: TimeInterval = 0
-    private static let dismissArmDelay: TimeInterval = 0.3
+    /// Set right before `WindowLayoutService` activates the placed window's
+    /// app after a pick, so the resulting `didResignKeyNotification` this
+    /// panel's own window posts — activating any other app resigns key from
+    /// whichever window currently holds it — is not mistaken for the person
+    /// clicking away on their own. A time window, not a one-shot flag: that
+    /// activation is requested asynchronously (`NSRunningApplication.
+    /// activate`), so exactly when the resulting resign notification lands
+    /// relative to a following `show()` call for the next free cell is not
+    /// guaranteed.
+    private var suppressResignDismissUntil: TimeInterval = 0
+    private static let resignSuppressionWindow: TimeInterval = 1.0
 
     /// Spec §4 point 4: eight seconds of inactivity closes the overlay and
     /// leaves the space free, the same as Esc or a click elsewhere.
     private static let inactivityTimeout: TimeInterval = 8
-    // Not private: `SnapAssistHostingView.cardIndex(at:)` hit-tests against
-    // this exact constant too, so the frame `layout` sizes the panel with
-    // and the frame a click is tested against can never disagree.
     static let padding: CGFloat = 16
     private static let footerHeight: CGFloat = 28
     private static let outerInset: CGFloat = 6
@@ -176,31 +89,32 @@ final class SnapAssistPanel {
              on screen: NSScreen,
              items: [SwitcherItem],
              hint: String,
-             ignoringActivationOf ownerPID: pid_t,
              onSelect: @escaping (SwitcherItem) -> Void) {
         let (frame, columns) = layout(itemCount: items.count, freeRect: freeRect, visibleFrame: screen.visibleFrame)
-        state.items = items
-        state.previews = state.previews.filter { id, _ in items.contains { $0.windowID == id } }
-        state.hint = hint
-        state.columns = columns
-        state.onSelect = onSelect
-        ignoredOwnerPID = ownerPID
-        dismissArmedAt = ProcessInfo.processInfo.systemUptime + Self.dismissArmDelay
-
         let panel = ensurePanel()
+        let content = contentView ?? {
+            let created = SnapAssistContentView(frame: .zero)
+            self.contentView = created
+            panel.contentView = created
+            return created
+        }()
+        content.configure(items: items, columns: columns, hint: hint, onSelect: onSelect)
+
         panel.setFrame(frame, display: true)
-        if !panel.isVisible {
+        let wasVisible = panel.isVisible
+        if !wasVisible {
             panel.alphaValue = 0
-            panel.orderFrontRegardless()
-            panel.makeKey()
+        }
+        // A real activation, not just `makeKey()`: see the type's own doc
+        // comment for the real-Mac finding that made this necessary.
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        if !wasVisible {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().alphaValue = 1
             }
-        } else {
-            panel.orderFrontRegardless()
-            panel.makeKey()
         }
         installMonitors(for: panel)
         resetDismissTimer()
@@ -209,21 +123,20 @@ final class SnapAssistPanel {
     /// A thumbnail landed for one of the offered windows; called from
     /// `WindowPreviewProvider.refreshPreviews`'s update callback.
     func updatePreview(_ image: CGImage, for windowID: CGWindowID) {
-        state.previews[windowID] = image
+        contentView?.updatePreview(image, for: windowID)
     }
 
-    /// See `suppressActivationDismissUntil`'s doc comment. Called by
-    /// `WindowLayoutService` immediately before it activates a chosen
-    /// candidate's app.
-    func ignoreNextAppActivation() {
-        suppressActivationDismissUntil = ProcessInfo.processInfo.systemUptime + Self.activationSuppressionWindow
+    /// See `suppressResignDismissUntil`'s doc comment. Called by
+    /// `WindowLayoutService` immediately before it activates a picked
+    /// window's app.
+    func ignorePendingResign() {
+        suppressResignDismissUntil = ProcessInfo.processInfo.systemUptime + Self.resignSuppressionWindow
     }
 
     func hide() {
         dismissTimer?.invalidate()
         dismissTimer = nil
         removeMonitors()
-        state.onSelect = nil
         guard let panel, panel.isVisible else { return }
         panel.orderOut(nil)
     }
@@ -236,11 +149,7 @@ final class SnapAssistPanel {
     /// says how big that grid actually is, and the panel is inset a little
     /// so it reads as covering the zone rather than flush with its very
     /// edge. Never bigger than the zone it covers, never smaller than one
-    /// row, and always finally clamped inside `visibleFrame` itself — the
-    /// same size math the view's grid uses, so the two can never disagree
-    /// (unlike an earlier version of this method, which sized the panel by
-    /// a single always-one-column estimate while the view laid out an
-    /// unrelated adaptive grid of its own).
+    /// row, and always finally clamped inside `visibleFrame` itself.
     private func layout(itemCount: Int, freeRect: CGRect, visibleFrame: CGRect) -> (frame: CGRect, columns: Int) {
         let bounds = freeRect.intersection(visibleFrame)
         let usableBounds = bounds.isNull || bounds.isEmpty ? freeRect : bounds
@@ -275,7 +184,7 @@ final class SnapAssistPanel {
     private func ensurePanel() -> KeyableSnapAssistPanel {
         if let panel { return panel }
         let panel = KeyableSnapAssistPanel(contentRect: .zero,
-                                           styleMask: [.borderless, .nonactivatingPanel],
+                                           styleMask: [.borderless],
                                            backing: .buffered,
                                            defer: false)
         panel.title = "Vorssaint"
@@ -289,19 +198,6 @@ final class SnapAssistPanel {
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.animationBehavior = .none
-        let hostingView = SnapAssistHostingView(rootView: SnapAssistPanelView(state: state))
-        // Without this, NSHostingView silently grows its own window to its
-        // SwiftUI content's ideal size shortly after `setFrame` — real-Mac
-        // testing found the window widening itself from the intended 148pt
-        // (one column) to 161pt a moment after `show`, with `layout`'s own
-        // frame/column math never told about the change. Every card's
-        // clickable area is placed by that same math, so the grown window
-        // and the still-148pt-assumed card positions silently disagreed:
-        // a click aimed at a card's computed center landed on empty padding
-        // instead, hit nothing, and the pick never fired.
-        hostingView.sizingOptions = []
-        hostingView.autoresizingMask = [.width, .height]
-        panel.contentView = hostingView
         self.panel = panel
         return panel
     }
@@ -326,46 +222,17 @@ final class SnapAssistPanel {
             }
             return event
         }
-        // Geometric containment, not `event.window === panel`: a click
-        // physically over the panel is what matters, and checking identity
-        // against `.window` instead was found, on a real Mac, to treat a
-        // genuine click on a card as "outside" — closing the overlay before
-        // the click ever reached the card underneath (`event.window` is not
-        // dependable for every path an event can take to a borderless,
-        // non-activating panel's own subviews). `NSEvent.mouseLocation` is
-        // the authoritative screen position for a local monitor's own event
-        // regardless of which window AppKit happens to have attributed it
-        // to.
-        let mouseEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents) { [weak self, weak panel] event in
-            guard let self, let panel, panel.isVisible else { return event }
-            if Self.mouseIsInside(panel) {
-                self.resetDismissTimer()
-            } else {
-                self.hide()
-            }
-            return event
-        }
-        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents) { [weak self, weak panel] event in
-            guard let self, let panel, panel.isVisible else { return }
-            if event.windowNumber != panel.windowNumber, !Self.mouseIsInside(panel) {
-                self.hide()
-            }
-        }
-        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
+        // A real, key, activating panel makes "clicked elsewhere" and
+        // "switched app" the same event AppKit already tells every window
+        // about on its own: losing key status. No click monitor of any
+        // kind is needed to reconstruct that.
+        resignKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: panel,
             queue: .main
-        ) { [weak self] notification in
-            guard let self,
-                  let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-                  app.bundleIdentifier != Bundle.main.bundleIdentifier,
-                  app.processIdentifier != self.ignoredOwnerPID
-            else { return }
-            let now = ProcessInfo.processInfo.systemUptime
-            if now < self.suppressActivationDismissUntil || now < self.dismissArmedAt {
-                return
-            }
+        ) { [weak self] _ in
+            guard let self else { return }
+            if ProcessInfo.processInfo.systemUptime < self.suppressResignDismissUntil { return }
             self.hide()
         }
         // A display reconfiguration (unplugged, resolution change, a
@@ -381,19 +248,11 @@ final class SnapAssistPanel {
         }
     }
 
-    private static func mouseIsInside(_ panel: NSPanel) -> Bool {
-        panel.frame.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation)
-    }
-
     private func removeMonitors() {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
-        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
-        localClickMonitor = nil
-        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
-        outsideClickMonitor = nil
-        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
-        activationObserver = nil
+        if let resignKeyObserver { NotificationCenter.default.removeObserver(resignKeyObserver) }
+        resignKeyObserver = nil
         if let screenParametersObserver { NotificationCenter.default.removeObserver(screenParametersObserver) }
         screenParametersObserver = nil
     }

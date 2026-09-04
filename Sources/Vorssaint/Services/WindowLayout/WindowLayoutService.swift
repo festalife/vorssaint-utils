@@ -337,7 +337,6 @@ final class WindowLayoutService: ObservableObject {
             // call `applyPlacement`).
             showSnapAssistIfNeeded(action: effectiveAction,
                                    windowID: target.windowID,
-                                   ownerPID: target.key.processID,
                                    visibleFrame: visibleFrame,
                                    fallbackFrame: target.frame)
             return finish(.success(restored: false))
@@ -825,7 +824,6 @@ final class WindowLayoutService: ObservableObject {
     /// flickers a hide-then-fade-back-in.
     private func showSnapAssistIfNeeded(action: WindowLayoutAction,
                                         windowID: CGWindowID,
-                                        ownerPID: pid_t,
                                         visibleFrame: NSRect,
                                         fallbackFrame: WindowLayoutFrame) {
         guard snapAssistEnabled,
@@ -888,22 +886,20 @@ final class WindowLayoutService: ObservableObject {
         // same bailout `SnapGroupSupport.freeSpace` already applies to an
         // oversized minimum window.
         guard SnapAssistSupport.isOfferable(freeRect: freeRect) else { hideSnapAssist(); return }
-        presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen, ownerPID: ownerPID)
+        presentSnapAssist(cell: cell, freeRect: freeRect, items: items, screen: screen)
     }
 
     private func presentSnapAssist(cell: WindowLayoutAction,
                                    freeRect: CGRect,
                                    items: [SwitcherItem],
-                                   screen: NSScreen,
-                                   ownerPID: pid_t) {
+                                   screen: NSScreen) {
         let panel = snapAssistPanel ?? {
             let created = SnapAssistPanel()
             snapAssistPanel = created
             return created
         }()
         let text = FeatureStrings.windowLayout(L10n.shared.language)
-        panel.show(in: freeRect, on: screen, items: items, hint: text.snapAssistHint, ignoringActivationOf: ownerPID) {
-            [weak self] item in
+        panel.show(in: freeRect, on: screen, items: items, hint: text.snapAssistHint) { [weak self] item in
             self?.selectSnapAssistCandidate(item, cell: cell, screen: screen)
         }
         WindowPreviewProvider.shared.refreshPreviews(for: items) { [weak panel] windowID, image in
@@ -960,7 +956,7 @@ final class WindowLayoutService: ObservableObject {
     /// whole overlay to one failed pick.
     private func selectSnapAssistCandidate(_ item: SwitcherItem, cell: WindowLayoutAction, screen: NSScreen) {
         guard let windowID = item.windowID else { return }
-        snapAssistPanel?.ignoreNextAppActivation()
+        snapAssistPanel?.ignorePendingResign()
         applySnapAssistPlacement(cell, windowID: windowID, pid: item.windowOwnerPID, screen: screen)
     }
 
