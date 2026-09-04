@@ -27,6 +27,24 @@ enum SnapLinkedResizeSupport {
     /// reads of a frame nobody actually moved.
     private static let edgeChangeTolerance: CGFloat = 0.5
 
+    /// How far a window's reported *size* can drift between two live reads
+    /// and still count as a plain move rather than a resize — found against
+    /// a real instance of Chrome: dragging a snapped window by its title
+    /// bar (an ordinary move, on-screen size unchanged) reported width
+    /// jitter of up to 8pt mid-drag (GPU-composited/dynamic chrome apps
+    /// resample their own frame during a live move, unlike a plain AppKit
+    /// window such as TextEdit, which reports an exact, stable size). An
+    /// exact `CGSize` comparison treated that jitter as a genuine resize
+    /// and pulled the neighbour along for what was really just a drag
+    /// across the screen. 10pt clears the observed jitter with a couple of
+    /// points of margin while staying well below any resize a person would
+    /// actually perform deliberately.
+    static let moveSizeTolerance: CGFloat = 10
+
+    private static func sizeChanged(_ a: CGSize, _ b: CGSize) -> Bool {
+        abs(a.width - b.width) > moveSizeTolerance || abs(a.height - b.height) > moveSizeTolerance
+    }
+
     /// Which side of a zone a neighbouring zone shares a real border with.
     /// Named by the coordinate of the zone the neighbour sits against, not
     /// by screen direction, so the same four cases read the same regardless
@@ -87,10 +105,10 @@ enum SnapLinkedResizeSupport {
     /// frames end up flush rather than overlapping.
     ///
     /// Empty when nothing needs to change: `oldFrame == newFrame`, the
-    /// frame only moved (`size` unchanged — spec §6 links a resize, never a
-    /// plain drag, and the existing overlap-based prune already handles a
-    /// window dragged out of the group), or the edge that did move touches
-    /// no neighbour.
+    /// frame only moved (`size` unchanged within `moveSizeTolerance` — spec
+    /// §6 links a resize, never a plain drag, and the existing overlap-based
+    /// prune already handles a window dragged out of the group), or the
+    /// edge that did move touches no neighbour.
     ///
     /// `theoreticalZones` supplies every member's *theoretical* zone — the
     /// `WindowLayoutAction`'s own rect on that screen (halves/thirds/
@@ -148,7 +166,7 @@ enum SnapLinkedResizeSupport {
                             currentFrames: [CGWindowID: CGRect],
                             minimumSize: (CGWindowID) -> CGSize) -> [Adjustment] {
         guard oldFrame != newFrame,
-              oldFrame.size != newFrame.size,
+              sizeChanged(oldFrame.size, newFrame.size),
               let resizedZone = theoreticalZones[resizedWindowID]
         else { return [] }
 

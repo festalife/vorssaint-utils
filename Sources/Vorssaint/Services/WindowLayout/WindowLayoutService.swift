@@ -1879,9 +1879,12 @@ final class WindowLayoutService: ObservableObject {
         // Checked before `adjustments` below on purpose — this fires even
         // when the moved edge faces open screen and no neighbour ends up
         // adjusted, since it is the resize itself, not its knock-on effect,
-        // that makes the offer stale. A plain move (`newFrame.size ==
-        // oldFrame.size`) leaves the overlay alone.
-        if newFrame.size != oldFrame.size {
+        // that makes the offer stale. A plain move — size unchanged within
+        // `SnapLinkedResizeSupport.moveSizeTolerance`, the same tolerance
+        // `adjustments` itself uses to tell a move from a resize — leaves
+        // the overlay alone.
+        let sizeDelta = max(abs(newFrame.width - oldFrame.width), abs(newFrame.height - oldFrame.height))
+        if sizeDelta > SnapLinkedResizeSupport.moveSizeTolerance {
             hideSnapAssist()
         }
 
@@ -1891,7 +1894,7 @@ final class WindowLayoutService: ObservableObject {
         }
         let zones = theoreticalZones(for: group, on: screen)
 
-        var liveFrames = rawCurrentFrames(for: group)
+        var liveFrames = rawCurrentFrames(for: group).frames
         liveFrames[windowID] = newFrame
 
         let adjustments = SnapLinkedResizeSupport.adjustments(

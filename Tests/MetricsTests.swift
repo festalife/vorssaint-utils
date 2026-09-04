@@ -6714,6 +6714,27 @@ struct MetricsTests {
                                                     minimumSize: slrNoMinimum).isEmpty,
                "moving a snapped window without resizing it never links its neighbour")
 
+        // Real-Mac regression: dragging a snapped window by its title bar
+        // (a plain move, on-screen size unchanged) against a real instance
+        // of Chrome reported a few points of *size* jitter mid-drag — GPU-
+        // composited/dynamic-chrome apps resample their own frame during a
+        // live move, unlike a plain AppKit window (TextEdit), which reports
+        // an exact, stable size. An exact CGSize comparison treated that
+        // jitter as a genuine resize and pulled the neighbour along for
+        // what was really just a drag across the screen.
+        let slrJitterMoved = CGRect(x: sgLeftZone.minX + 50, y: sgLeftZone.minY - 50,
+                                    width: sgLeftZone.width - 7, height: sgLeftZone.height + 4)
+        expect(SnapLinkedResizeSupport.adjustments(resizedWindowID: 1, oldFrame: sgLeftZone, newFrame: slrJitterMoved,
+                                                    group: slrSideGroup,
+                                                    theoreticalZones: Dictionary(uniqueKeysWithValues: slrSideGroup.members.map { ($0.windowID, $0.frame) }),
+                                                    gap: sgGap,
+                                                    currentFrames: [1: slrJitterMoved, 40: sgRightZone],
+                                                    minimumSize: slrNoMinimum).isEmpty,
+               "a few points of size jitter during a real drag (well within moveSizeTolerance) still reads " +
+               "as a move, not a resize, and never links the neighbour")
+        expect(SnapLinkedResizeSupport.moveSizeTolerance >= 8,
+               "the jitter tolerance stays at least as generous as the real Chrome jitter (up to 8pt) this regression test guards")
+
         // Both X edges moved between two stale reads: A's left edge (no
         // neighbour there) moves out by 10pt at the same time its right
         // edge (touching B) moves out by 40pt. Both must be handled — a
