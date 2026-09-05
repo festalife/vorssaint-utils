@@ -374,6 +374,34 @@ enum SnapGroupSupport {
         return result
     }
 
+    /// How far an accepted size may differ from the requested one and still
+    /// count as the app having simply obliged.
+    static let clampTolerance: CGFloat = 2
+
+    /// Whether a write came back refused by the app's own minimum size, as
+    /// opposed to obliged, rounded, or simply not applied yet.
+    ///
+    /// **Size only, and only when the result is *larger* than asked for.** A
+    /// minimum can only ever make a window bigger than requested; anything
+    /// smaller, or any difference in position, is something else. Position was
+    /// never a signal, and treating "differs at all" as a clamp misfired on
+    /// every single write against an app with no minimum at all — the
+    /// read-back taken immediately after `AXUIElementSetAttributeValue`
+    /// returns the *pre-write* frame, since Accessibility applies the change
+    /// asynchronously, so a neighbour being widened from 756 to 910 read back
+    /// as 756, was called a clamp, and got re-anchored straight back to its
+    /// own zone. Every seam drag moved one window and left the other exactly
+    /// where it started.
+    ///
+    /// The read this is asked about must therefore be taken after the write
+    /// has had a chance to land (`SnapGroupStore` re-reads on a short settle),
+    /// or a shrink still reads as a clamp for the same reason.
+    static func isMinimumSizeClamp(requested: CGSize,
+                                   accepted: CGSize,
+                                   tolerance: CGFloat = clampTolerance) -> Bool {
+        accepted.width > requested.width + tolerance || accepted.height > requested.height + tolerance
+    }
+
     /// `free` with every edge `action` anchors to a *screen* edge forced back
     /// to `theoreticalZone`'s own value.
     ///

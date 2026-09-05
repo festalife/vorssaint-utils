@@ -308,12 +308,20 @@ final class WindowLayoutService: ObservableObject {
             }
         }
         lastActions[target.key] = effectiveAction
+        // Reported from the geometry, not from whether a write was issued: the
+        // frame read just before the write against the frame the placement
+        // ends at. Re-snapping a window into the zone it already occupies
+        // differs from it only by the sub-point rounding `.integral` leaves
+        // behind, and logging that as a move made a no-op re-snap look like
+        // the window had gone somewhere.
+        let movedWindow = !placement.frame.isClose(to: target.frame,
+                                                   tolerance: WindowLayoutGeometry.frameTolerance)
         SnapController.shared.placementDidLand(action: effectiveAction,
                                                windowID: target.windowID,
                                                appliedRect: placement.rect,
                                                preSnapRect: currentRect,
                                                visibleFrame: visibleFrame,
-                                               movedWindow: !alreadyInPlace,
+                                               movedWindow: movedWindow,
                                                origin: origin)
         return finish(.success(restored: false))
     }

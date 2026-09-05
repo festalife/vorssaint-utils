@@ -7257,6 +7257,30 @@ struct MetricsTests {
         expect(smReset.apply(.reset(reason: "Accessibility revoked")).to == .idle,
                "a reset returns to idle from any phase")
 
+        // MARK: Telling an app's minimum from a read that had not landed
+
+        // Accessibility applies a frame change asynchronously, so the
+        // read-back taken right after the write returns the pre-write frame.
+        // The captured regression: a neighbour being widened 756 -> 910 read
+        // back as 756, was called a minimum-size clamp, and was re-anchored
+        // straight back to its own zone — so every seam drag moved one window
+        // and left the other exactly where it started.
+        expect(!SnapGroupSupport.isMinimumSizeClamp(requested: CGSize(width: 914, height: 949),
+                                                    accepted: CGSize(width: 756, height: 949)),
+               "a read-back still showing the previous, smaller size is a write that had not landed")
+        expect(SnapGroupSupport.isMinimumSizeClamp(requested: CGSize(width: 140, height: 949),
+                                                   accepted: CGSize(width: 400, height: 949)),
+               "coming back wider than asked for is the only thing a minimum size can look like")
+        expect(!SnapGroupSupport.isMinimumSizeClamp(requested: CGSize(width: 400, height: 949),
+                                                    accepted: CGSize(width: 401, height: 949)),
+               "a point of rounding is the app obliging, not refusing")
+        expect(!SnapGroupSupport.isMinimumSizeClamp(requested: CGSize(width: 400, height: 949),
+                                                    accepted: CGSize(width: 400, height: 949)),
+               "an exact match is obviously not a clamp")
+        expect(SnapGroupSupport.isMinimumSizeClamp(requested: CGSize(width: 756, height: 200),
+                                                   accepted: CGSize(width: 756, height: 480)),
+               "a minimum on the other axis counts just the same")
+
         // MARK: Linked resize against an app's own minimum size
 
         // A 1512x949 screen, halves, no gap. B (rightHalf, zone x=756) has an

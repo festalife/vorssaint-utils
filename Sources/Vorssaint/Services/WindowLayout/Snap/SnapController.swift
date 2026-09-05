@@ -70,6 +70,15 @@ final class SnapController {
     /// Set while `transition` is closing the Snap Assist panel, so the
     /// panel's own `onDismiss` cannot re-enter the machine.
     private var isLeavingAssist = false
+    /// The candidate list a Snap Assist session opened with, in the order it
+    /// was first offered. Reused for every later cell of the same session,
+    /// with only the windows that have since been picked (or closed) removed.
+    ///
+    /// Recomputing it per cell re-sorted the cards by most-recent-use, so the
+    /// card at a given position changed under the pointer between one cell and
+    /// the next — the person aims at what they just saw and gets something
+    /// else. `nil` whenever no session is open.
+    private var sessionCandidates: [SwitcherItem]?
 
     /// Snap Group membership, live frames and linked resize — everything that
     /// remembers *where windows are*, kept out of this file so what is left
@@ -207,6 +216,7 @@ final class SnapController {
                 // The panel's own dismissal calls back in here; the flag stops
                 // that from re-entering as a second, meaningless transition.
                 isLeavingAssist = true
+                sessionCandidates = nil
                 assistPanel?.hide(reason: result.reason)
                 isLeavingAssist = false
             }
@@ -1210,6 +1220,8 @@ extension SnapController {
             autoFill(cell: cell, placedWindowID: windowID, screen: screen)
             return
         }
+        // A fresh session starts with a fresh order, fixed from here on.
+        sessionCandidates = nil
         transition(.assistSessionOpened(session))
         presentAssist(cell: cell, placedWindowID: windowID, screen: screen)
     }
@@ -1267,7 +1279,20 @@ extension SnapController {
         var excluded: Set<CGWindowID> = [placedWindowID]
         excluded.formUnion(groups.pruned(on: screen).members.map(\.windowID))
 
-        let items = candidates(on: screen, excluding: excluded)
+        let items: [SwitcherItem]
+        if let established = sessionCandidates {
+            // Same session, next cell: keep the order the person is already
+            // looking at, dropping only what has since been taken.
+            items = established.filter { item in
+                guard let windowID = item.windowID else { return false }
+                return !excluded.contains(windowID)
+            }
+        } else {
+            items = candidates(on: screen, excluding: excluded)
+            // Only a session fixes an order; auto mode places one window and
+            // has nothing to keep stable.
+            if case .assisting = machine.phase { sessionCandidates = items }
+        }
         guard !items.isEmpty else {
             SnapLog.event("assist.no-candidates", "cell=\(cell) excluded=\(excluded.count)")
             return nil
@@ -1470,15 +1495,18 @@ extension SnapController {
         let seen = Set(mru)
         ordered.append(contentsOf: byWindowID.keys.filter { !seen.contains($0) }.compactMap { byWindowID[$0] })
         let dropSummary = dropped.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
+        let order = ordered.map { "\($0.windowID.map(String.init) ?? "?"):\($0.displayTitle)" }
+            .joined(separator: " | ")
         SnapLog.event("assist.candidates",
                       "screen=\(screen.displayID) enumerated=\(enumerated) offered=\(ordered.count) "
-                          + "dropped=[\(dropSummary)]")
+                          + "dropped=[\(dropSummary)] order=[\(order)]")
         return ordered
     }
 
     /// Ends the session without an overlay dismissal having happened — the
     /// controller itself deciding there is nothing to offer.
     private func endAssist(reason: String) {
+        sessionCandidates = nil
         if case .assisting = machine.phase {
             transition(.assistDismissed(reason: reason))
         } else {
@@ -1489,6 +1517,7 @@ extension SnapController {
 
     /// Closes the overlay from outside (a fresh drag, a hand resize, suspend).
     func hideAssist(reason: String) {
+        sessionCandidates = nil
         if case .assisting = machine.phase {
             SnapLog.event("assist.cancel", "reason=\(reason)")
             transition(.assistDismissed(reason: reason))

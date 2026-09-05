@@ -729,22 +729,21 @@ final class SnapGroupStore {
     /// Deliberately never updates a member's stored zone: a linked resize is
     /// not a placement. Writing the live result back was exactly the bug that
     /// made a resize drag work for one step and then stop.
-    /// Writes every adjustment, puts any neighbour its own app refused to
-    /// shrink back flush against the screen edge its zone was anchored to, and
-    /// then pulls the resized window's edge back to meet it (spec §6, "the
-    /// divider stops at the minimum").
+    /// Writes every adjustment, then confirms — after a short settle — whether
+    /// any neighbour's app actually refused the size it was given, and only
+    /// then puts that neighbour back flush against its own screen edges and
+    /// pulls the resized window's edge over to meet it (spec §6, "the divider
+    /// stops at the minimum").
     ///
-    /// The re-anchoring is the part a real capture found missing. An app that
-    /// clamps the size it was given generally keeps the origin, so a
-    /// right-anchored neighbour asked for 140pt came back 400pt wide *starting
-    /// where 140pt would have started* — off its screen edge, drifting toward
-    /// the centre, which is exactly what it looked like on screen. A neighbour
-    /// frame whose anchored edge does not match its zone's is never left
-    /// standing.
+    /// The settle is not optional. Accessibility applies a frame change
+    /// asynchronously, so the read-back taken immediately after the write
+    /// returns the *pre-write* frame — which made every write against an app
+    /// with no minimum at all look like a clamp, and re-anchored the neighbour
+    /// straight back to where it started. Confirming on a re-read is what
+    /// tells a real minimum from a value that had simply not landed yet.
     ///
     /// Deliberately never updates a member's stored zone: a linked resize is
-    /// not a placement. Writing the live result back was the bug that made a
-    /// resize drag work for one step and then stop.
+    /// not a placement.
     private func apply(_ adjustments: [SnapLinkedResizeSupport.Adjustment],
                        resizedWindowID: CGWindowID,
                        oldFrame: CGRect,
@@ -752,45 +751,73 @@ final class SnapGroupStore {
                        group: SnapGroup,
                        theoreticalZones: [CGWindowID: CGRect]) {
         let deadline = ProcessInfo.processInfo.systemUptime + Self.linkedResizeBudget
-        var applied: [CGWindowID: CGRect] = [:]
+        var requested: [CGWindowID: CGRect] = [:]
         for adjustment in adjustments {
             guard ProcessInfo.processInfo.systemUptime < deadline else {
                 SnapLog.event("link.budget", "stopped early, remaining members retry on the next notification")
                 break
             }
-            applied[adjustment.windowID] = write(adjustment.frame, to: adjustment.windowID)
+            write(adjustment.frame, to: adjustment.windowID)
+            if adjustment.windowID != resizedWindowID { requested[adjustment.windowID] = adjustment.frame }
         }
+        guard !requested.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.clampSettleDelay) { [weak self] in
+            self?.confirmClamps(requested: requested,
+                                resizedWindowID: resizedWindowID,
+                                oldFrame: oldFrame,
+                                newFrame: newFrame,
+                                group: group,
+                                theoreticalZones: theoreticalZones)
+        }
+    }
 
-        var clampedNeighbours: [CGWindowID: CGSize] = [:]
-        for adjustment in adjustments where adjustment.windowID != resizedWindowID {
-            guard let member = group.members.first(where: { $0.windowID == adjustment.windowID }),
-                  let actual = applied[adjustment.windowID],
-                  abs(actual.width - adjustment.frame.width) > WindowLayoutGeometry.frameTolerance
-                    || abs(actual.height - adjustment.frame.height) > WindowLayoutGeometry.frameTolerance
+    /// How long to wait before believing a read-back. Long enough for an
+    /// ordinary Accessibility write to have landed, short enough to stay
+    /// invisible inside a seam drag.
+    private static let clampSettleDelay: TimeInterval = 0.05
+
+    private func confirmClamps(requested: [CGWindowID: CGRect],
+                               resizedWindowID: CGWindowID,
+                               oldFrame: CGRect,
+                               newFrame: CGRect,
+                               group: SnapGroup,
+                               theoreticalZones: [CGWindowID: CGRect]) {
+        var clamped: [CGWindowID: CGSize] = [:]
+        var live: [CGWindowID: CGRect] = [:]
+        for (windowID, requestedFrame) in requested {
+            guard let member = group.members.first(where: { $0.windowID == windowID }),
+                  let element = watcher.element(for: windowID),
+                  let settled = SnapAX.frame(of: element)
             else { continue }
-            clampedNeighbours[adjustment.windowID] = actual.size
-            acceptedMinimums[adjustment.windowID] = actual.size
-
+            live[windowID] = settled
+            observe(settled, for: windowID)
+            guard SnapGroupSupport.isMinimumSizeClamp(requested: requestedFrame.size,
+                                                      accepted: settled.size)
+            else { continue }
+            // Confirmed only now: an app's minimum is remembered so the next
+            // step of the same drag clamps up front instead of rediscovering
+            // it and rewriting the neighbour on every notification.
+            clamped[windowID] = settled.size
+            acceptedMinimums[windowID] = settled.size
+            // Re-anchor: an app that refuses a size generally keeps the origin
+            // it was given, which leaves the member hanging off the screen edge
+            // its zone is anchored to. Only the anchored edges are moved; the
+            // shared edge keeps the size the app accepted.
             let reanchored = SnapGroupSupport.reanchoredFrame(action: member.action,
                                                               zone: member.frame,
-                                                              acceptedSize: actual.size)
+                                                              acceptedSize: settled.size)
             SnapLog.event("link.clamped",
-                          "windowID=\(adjustment.windowID) action=\(member.action) "
-                              + "requested=\(SnapLog.rect(adjustment.frame)) accepted=\(SnapLog.rect(actual)) "
+                          "windowID=\(windowID) action=\(member.action) "
+                              + "requested=\(SnapLog.rect(requestedFrame)) settled=\(SnapLog.rect(settled)) "
                               + "reanchored=\(SnapLog.rect(reanchored))")
-            guard reanchored != actual, ProcessInfo.processInfo.systemUptime < deadline else {
-                applied[adjustment.windowID] = actual
-                continue
-            }
-            applied[adjustment.windowID] = write(reanchored, to: adjustment.windowID) ?? reanchored
+            guard reanchored != settled else { continue }
+            live[windowID] = write(reanchored, to: windowID) ?? reanchored
         }
+        guard !clamped.isEmpty else { return }
 
-        guard !clampedNeighbours.isEmpty, ProcessInfo.processInfo.systemUptime < deadline else { return }
-
-        // Now that every clamped neighbour is back on its own edge, the
-        // resized window's own edge is recomputed against those real frames,
-        // which is what leaves the seam a single line instead of a gap.
-        var live = applied
+        // Every clamped neighbour is back on its own edge, so the resized
+        // window's own edge can be recomputed against real frames — which is
+        // what leaves the seam a single line instead of a gap.
         live[resizedWindowID] = newFrame
         let corrected = SnapLinkedResizeSupport.adjustments(
             resizedWindowID: resizedWindowID,
@@ -800,7 +827,7 @@ final class SnapGroupStore {
             theoreticalZones: theoreticalZones,
             gap: WindowLayoutGaps.windowGap,
             currentFrames: live,
-            minimumSize: { clampedNeighbours[$0] ?? self.acceptedMinimums[$0] ?? Self.minimumSizeGuess })
+            minimumSize: { clamped[$0] ?? self.acceptedMinimums[$0] ?? Self.minimumSizeGuess })
         for adjustment in corrected where adjustment.windowID == resizedWindowID {
             SnapLog.event("link.pushback",
                           "windowID=\(resizedWindowID) to=\(SnapLog.rect(adjustment.frame)) "
