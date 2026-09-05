@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Vorssaint
 
 import CoreGraphics
+import Foundation
 
 /// Where a placement came from. The distinction is load-bearing: only a
 /// *user* placement may open a Snap Assist session (spec §4 — "NON ricompare
@@ -215,6 +216,39 @@ struct SnapStateMachine: Equatable {
         case .assistDismissed: return "assistDismissed"
         case .reset: return "reset"
         }
+    }
+}
+
+/// When losing key status means the person dismissed the Snap Assist overlay,
+/// and when it means nothing at all.
+///
+/// The overlay uses `didResignKey` as its "clicked outside or switched app"
+/// signal, which is right — AppKit already tells a window about both — but
+/// only for a window that had key status to lose. A capture found the overlay
+/// shown and then closed with no user input whatsoever: `key=false` in the log
+/// line at show time, then a resign moments later. A window that never became
+/// key cannot have been clicked away from, and treating that as a dismissal
+/// closed the overlay before it had ever been usable.
+enum SnapAssistDismissal {
+    /// How long after `show()` a resign is ignored outright. Activation is not
+    /// instantaneous, and a real Mac was found bouncing key status once on the
+    /// way to settling.
+    static let showGracePeriod: TimeInterval = 0.5
+
+    static func resignShouldDismiss(hasBecomeKey: Bool,
+                                    secondsSinceShow: TimeInterval,
+                                    isPickReactivation: Bool,
+                                    isClickInFlight: Bool,
+                                    grace: TimeInterval = showGracePeriod) -> Bool {
+        // A pick re-activates the chosen window's app, which resigns key from
+        // whatever held it — never the person clicking away.
+        guard !isPickReactivation else { return false }
+        // A resign landing between a card's mouseDown and its mouseUp must not
+        // cut the click off before the pick it is about to make can run.
+        guard !isClickInFlight else { return false }
+        // Never key: there is no "away" to have clicked to.
+        guard hasBecomeKey else { return false }
+        return secondsSinceShow >= grace
     }
 }
 

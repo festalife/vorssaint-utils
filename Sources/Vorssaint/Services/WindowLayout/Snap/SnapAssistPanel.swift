@@ -90,6 +90,13 @@ final class SnapAssistPanel {
     private var contentView: SnapAssistContentView?
     private var keyMonitor: Any?
     private var resignKeyObserver: NSObjectProtocol?
+    private var becomeKeyObserver: NSObjectProtocol?
+    /// Whether this panel has actually held key status since the current
+    /// `show()`. A resign from a window that never became key is not a
+    /// dismissal — see `SnapAssistDismissal`.
+    private var hasBecomeKey = false
+    /// Invalidates the key retry and the state log of a superseded `show()`.
+    private var showGeneration = 0
     private var screenParametersObserver: NSObjectProtocol?
     private var dismissTimer: Timer?
     /// Set right before `WindowLayoutService` activates the placed window's
@@ -113,7 +120,6 @@ final class SnapAssistPanel {
     /// window from `show`, the same way it already ignores one inside
     /// `resignSuppressionWindow` from a pick's own re-activation.
     private var shownAt: TimeInterval = 0
-    private static let resignAfterShowGracePeriod: TimeInterval = 0.5
 
     /// Fires once at the end of every `hide()` that actually closed a
     /// visible panel — Esc, a click outside (`didResignKeyNotification`),
@@ -172,7 +178,16 @@ final class SnapAssistPanel {
         let wasVisible = panel.isVisible
         if !wasVisible {
             panel.alphaValue = 0
+            hasBecomeKey = false
         }
+        // Stamped before anything that can make the window resign key, so the
+        // grace period is always measured from this show and never from a
+        // previous one — or, on the very first show, from zero, which made
+        // every resign look like it had arrived hours late.
+        shownAt = ProcessInfo.processInfo.systemUptime
+        showGeneration += 1
+        let generation = showGeneration
+        installMonitors(for: panel)
         // `orderFrontRegardless()` first: it takes effect synchronously,
         // independent of app activation, so the window server already
         // considers this panel the frontmost window at this screen
@@ -194,10 +209,12 @@ final class SnapAssistPanel {
         // advancing to the next free cell re-raises the panel too rather than
         // trusting it to have stayed on top for the whole session.
         panel.orderFrontRegardless()
+        if panel.isKeyWindow { hasBecomeKey = true }
         SnapLog.event("assist.overlay-level",
                       "level=\(panel.level.rawValue) visible=\(panel.isVisible) key=\(panel.isKeyWindow) "
                           + "alpha=\(String(format: "%.2f", panel.alphaValue)) advanced=\(wasVisible)")
-        shownAt = ProcessInfo.processInfo.systemUptime
+        scheduleKeyRetry(generation: generation)
+        scheduleStateLog(generation: generation)
         if !wasVisible {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
@@ -211,8 +228,42 @@ final class SnapAssistPanel {
                 panel.alphaValue = 1
             }
         }
-        installMonitors(for: panel)
         resetDismissTimer()
+    }
+
+    /// Activation is asynchronous, and an accessory app asking for it from
+    /// deep inside an event-driven call chain does not always get it on the
+    /// first try. One retry, once, rather than a poll: either it takes or the
+    /// log says it did not, which is what a report needs to be actionable.
+    private func scheduleKeyRetry(generation: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, self.showGeneration == generation,
+                  let panel = self.panel, panel.isVisible
+            else { return }
+            if panel.isKeyWindow {
+                self.hasBecomeKey = true
+                return
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            panel.orderFrontRegardless()
+            if panel.isKeyWindow { self.hasBecomeKey = true }
+            SnapLog.event("assist.overlay-key", "retry=1 key=\(panel.isKeyWindow)")
+        }
+    }
+
+    /// The state a person is actually looking at, once everything has settled.
+    /// The line written at `show()` is taken mid-activation and mid-fade, so
+    /// on its own it can neither confirm nor rule out "it was never visible".
+    private func scheduleStateLog(generation: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.showGeneration == generation, let panel = self.panel else { return }
+            SnapLog.event("assist.overlay-state",
+                          "visible=\(panel.isVisible) key=\(panel.isKeyWindow) "
+                              + "becameKey=\(self.hasBecomeKey) "
+                              + "alpha=\(String(format: "%.2f", panel.alphaValue)) "
+                              + "frame=\(SnapLog.rect(panel.frame)) level=\(panel.level.rawValue)")
+        }
     }
 
     /// A thumbnail landed for one of the offered windows; called from
@@ -229,6 +280,8 @@ final class SnapAssistPanel {
     }
 
     func hide(reason: String = "closed by WindowLayoutService") {
+        showGeneration += 1
+        hasBecomeKey = false
         dismissTimer?.invalidate()
         dismissTimer = nil
         removeMonitors()
@@ -338,18 +391,18 @@ final class SnapAssistPanel {
             }
             return event
         }
-        // A real, key, activating panel makes "clicked elsewhere" and
-        // "switched app" the same event AppKit already tells every window
-        // about on its own: losing key status. No click monitor of any
-        // kind is needed to reconstruct that. Three cases never dismiss
-        // even though they resign key: a pick's own re-activation
-        // (`suppressResignDismissUntil`, unchanged), a resign landing
-        // inside `resignAfterShowGracePeriod` of this very `show()` (a
-        // real-Mac report found one arriving almost immediately after
-        // activation, before any click could land), and a resign while a
-        // left-button press that started inside this panel is still down
-        // (a resign mid-click must never cut the click off before its own
-        // mouseUp — and therefore its pick — gets a chance to run).
+        becomeKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            self?.hasBecomeKey = true
+        }
+        // A key, activating panel makes "clicked elsewhere" and "switched app"
+        // the same event AppKit already tells every window about on its own:
+        // losing key status. No click monitor of any kind is needed to
+        // reconstruct that — but only a window that *had* key status can lose
+        // it meaningfully, which `SnapAssistDismissal` is the decision for.
         resignKeyObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification,
             object: panel,
@@ -357,16 +410,18 @@ final class SnapAssistPanel {
         ) { [weak self, weak panel] _ in
             guard let self, let panel else { return }
             let now = ProcessInfo.processInfo.systemUptime
-            if now < self.suppressResignDismissUntil {
-                SnapLog.event("assist.resign-ignored", "reason=pick-reactivation-window")
-                return
-            }
-            if now - self.shownAt < Self.resignAfterShowGracePeriod {
-                SnapLog.event("assist.resign-ignored", "reason=within-grace-of-show")
-                return
-            }
-            if panel.isLeftMouseDownInside {
-                SnapLog.event("assist.resign-ignored", "reason=click-still-in-flight")
+            let sinceShow = now - self.shownAt
+            guard SnapAssistDismissal.resignShouldDismiss(
+                hasBecomeKey: self.hasBecomeKey,
+                secondsSinceShow: sinceShow,
+                isPickReactivation: now < self.suppressResignDismissUntil,
+                isClickInFlight: panel.isLeftMouseDownInside)
+            else {
+                SnapLog.event("assist.resign-ignored",
+                              "becameKey=\(self.hasBecomeKey) "
+                                  + "sinceShow=\(String(format: "%.2f", sinceShow)) "
+                                  + "pickReactivation=\(now < self.suppressResignDismissUntil) "
+                                  + "clickInFlight=\(panel.isLeftMouseDownInside)")
                 return
             }
             self.hide(reason: "resigned key (click outside or app switch)")
@@ -389,6 +444,8 @@ final class SnapAssistPanel {
         keyMonitor = nil
         if let resignKeyObserver { NotificationCenter.default.removeObserver(resignKeyObserver) }
         resignKeyObserver = nil
+        if let becomeKeyObserver { NotificationCenter.default.removeObserver(becomeKeyObserver) }
+        becomeKeyObserver = nil
         if let screenParametersObserver { NotificationCenter.default.removeObserver(screenParametersObserver) }
         screenParametersObserver = nil
     }

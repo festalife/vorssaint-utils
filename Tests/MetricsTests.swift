@@ -7569,6 +7569,42 @@ struct MetricsTests {
                == ghostHonest,
                "an answer that only moved the shared edge is passed through untouched")
 
+        // MARK: Losing key status is not always a dismissal
+
+        // The overlay closed itself with no user input at all: the log showed
+        // it shown with key=false and a resign moments later. A window that
+        // never held key status cannot have been clicked away from.
+        expect(!SnapAssistDismissal.resignShouldDismiss(hasBecomeKey: false,
+                                                        secondsSinceShow: 3,
+                                                        isPickReactivation: false,
+                                                        isClickInFlight: false),
+               "a resign from a window that never became key is not a dismissal")
+        expect(SnapAssistDismissal.resignShouldDismiss(hasBecomeKey: true,
+                                                       secondsSinceShow: 3,
+                                                       isPickReactivation: false,
+                                                       isClickInFlight: false),
+               "once it has held key status, losing it is the person clicking away")
+        expect(!SnapAssistDismissal.resignShouldDismiss(hasBecomeKey: true,
+                                                        secondsSinceShow: 0.2,
+                                                        isPickReactivation: false,
+                                                        isClickInFlight: false),
+               "but not while the key status from this very show is still settling")
+        expect(SnapAssistDismissal.resignShouldDismiss(hasBecomeKey: true,
+                                                       secondsSinceShow: SnapAssistDismissal.showGracePeriod,
+                                                       isPickReactivation: false,
+                                                       isClickInFlight: false),
+               "the grace period ends exactly where it says it does")
+        expect(!SnapAssistDismissal.resignShouldDismiss(hasBecomeKey: true,
+                                                        secondsSinceShow: 3,
+                                                        isPickReactivation: true,
+                                                        isClickInFlight: false),
+               "a pick re-activating the chosen window's app is never the person leaving")
+        expect(!SnapAssistDismissal.resignShouldDismiss(hasBecomeKey: true,
+                                                        secondsSinceShow: 3,
+                                                        isPickReactivation: false,
+                                                        isClickInFlight: true),
+               "and a resign between a card's mouseDown and mouseUp must not cut the pick off")
+
         // MARK: Snap Assist cell occupancy
 
         // Only a Snap Group member takes a cell out of the offer. The bug this
