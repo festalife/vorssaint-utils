@@ -72,6 +72,17 @@ final class SnapGroupStore {
     private var latestRequest: [CGWindowID: (size: CGSize, preWriteSize: CGSize?, generation: Int)] = [:]
     private var requestCounter = 0
 
+    /// Per-resized-window token for the pass that runs once a drag stops. Each
+    /// new resize notification supersedes the pending one, so the pass only
+    /// ever fires for the last step of a drag.
+    private var finalSettleToken: [CGWindowID: Int] = [:]
+    /// Which windows have already had their final pass deferred once because a
+    /// write was still in flight — so waiting for a quiet moment can never
+    /// become a loop, since the pass's own writes move the counter too.
+    private var finalSettleDeferred: Set<CGWindowID> = []
+    /// How long without a notification counts as "the drag has stopped".
+    private static let dragIdleDelay: TimeInterval = 0.15
+
     /// Frames this store wrote itself, and when. The AX notification a write
     /// provokes must not be mistaken for a fresh user drag — correlated by
     /// *frame*, not by a time window, so a genuine resize starting moments
@@ -182,6 +193,8 @@ final class SnapGroupStore {
         lastLiveFrames.removeAll()
         acceptedMinimums.removeAll()
         latestRequest.removeAll()
+        finalSettleToken.removeAll()
+        finalSettleDeferred.removeAll()
         selfWrites.removeAll()
         framesCache.removeAll()
         syncWatcher(enabled: watcherEnabled)
@@ -201,6 +214,8 @@ final class SnapGroupStore {
         lastLiveFrames.removeValue(forKey: windowID)
         acceptedMinimums.removeValue(forKey: windowID)
         latestRequest.removeValue(forKey: windowID)
+        finalSettleToken.removeValue(forKey: windowID)
+        finalSettleDeferred.remove(windowID)
         SnapLog.event("group.leave", "windowID=\(windowID) reason=\(reason)")
         syncWatcher(enabled: watcherEnabled)
     }
@@ -646,6 +661,8 @@ final class SnapGroupStore {
         lastLiveFrames.removeAll()
         acceptedMinimums.removeAll()
         latestRequest.removeAll()
+        finalSettleToken.removeAll()
+        finalSettleDeferred.removeAll()
         framesCache.removeAll()
     }
 
@@ -743,6 +760,7 @@ final class SnapGroupStore {
         SnapLog.event("link.adjust", "windowID=\(windowID) count=\(adjustments.count)")
         apply(adjustments, resizedWindowID: windowID, oldFrame: reference, newFrame: newFrame,
               group: group, theoreticalZones: zones)
+        scheduleFinalSettle(for: windowID)
     }
 
     private var restoreOnDragEnabled: Bool {
@@ -930,6 +948,93 @@ final class SnapGroupStore {
             } else {
                 write(adjustment.frame, to: resizedWindowID)
             }
+        }
+    }
+
+    // MARK: - The last word, once the drag stops
+
+    /// Arms the pass that runs when notifications for `windowID` stop coming.
+    /// Every new notification supersedes the pending one, so exactly one pass
+    /// runs, for the last step of the drag.
+    private func scheduleFinalSettle(for windowID: CGWindowID) {
+        let token = (finalSettleToken[windowID] ?? 0) + 1
+        finalSettleToken[windowID] = token
+        finalSettleDeferred.remove(windowID)
+        let counter = requestCounter
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragIdleDelay) { [weak self] in
+            self?.finalSettle(for: windowID, token: token, requestCounterAtSchedule: counter)
+        }
+    }
+
+    /// The pass that gives a drag its last word.
+    ///
+    /// Every step of a linked resize is corrected by the notification that
+    /// follows it — except the last one, which by definition has none: the
+    /// pointer stopped. Whatever had not landed at that moment simply stayed,
+    /// which is how a drag ended with the neighbour's right edge 92pt short of
+    /// the screen, and with the seam a few points out because the closing
+    /// writes landed late.
+    ///
+    /// So once notifications go quiet, the neighbours are re-read and put
+    /// exactly where the resized window's *final* live edge says they belong:
+    /// flush against it on the shared edge, flush against the screen on their
+    /// anchored ones. A neighbour already at a size its app has been seen to
+    /// refuse is left alone — that is not an unfinished write.
+    private func finalSettle(for resizedWindowID: CGWindowID, token: Int, requestCounterAtSchedule: Int) {
+        guard finalSettleToken[resizedWindowID] == token else { return }
+        guard watcherEnabled, AppFeature.windowLayout.isAvailable, AXIsProcessTrusted() else { return }
+        // A write issued since this was armed may still be in flight; wait for
+        // one more quiet interval rather than fighting it. Deferred at most
+        // once, since this pass's own writes move the counter too.
+        if requestCounter != requestCounterAtSchedule, !finalSettleDeferred.contains(resizedWindowID) {
+            finalSettleDeferred.insert(resizedWindowID)
+            let counter = requestCounter
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragIdleDelay) { [weak self] in
+                self?.finalSettle(for: resizedWindowID, token: token, requestCounterAtSchedule: counter)
+            }
+            return
+        }
+        guard let group = groups.values.first(where: { grp in
+                  grp.members.contains { $0.windowID == resizedWindowID }
+              }),
+              let resizedMember = group.members.first(where: { $0.windowID == resizedWindowID }),
+              let resizedElement = watcher.element(for: resizedWindowID),
+              let resizedLive = SnapAX.frame(of: resizedElement)
+        else { return }
+        observe(resizedLive, for: resizedWindowID)
+        framesCache.removeAll()
+
+        // Only the resized window's own final frame decides where the seam is,
+        // so each neighbour is measured against it alone.
+        let soloGroup = SnapGroup(screenID: group.screenID, members: [resizedMember])
+        for member in group.members where member.windowID != resizedWindowID {
+            guard latestRequest[member.windowID] != nil,
+                  let element = watcher.element(for: member.windowID),
+                  let settled = SnapAX.frame(of: element)
+            else { continue }
+            observe(settled, for: member.windowID)
+
+            let seamAligned = SnapGroupSupport.freeSpace(for: member.action,
+                                                         theoreticalZone: member.frame,
+                                                         group: soloGroup,
+                                                         gap: WindowLayoutGaps.windowGap,
+                                                         currentFrames: [resizedWindowID: resizedLive])
+            let desired = SnapGroupSupport.clampedToAnchors(seamAligned,
+                                                            action: member.action,
+                                                            theoreticalZone: member.frame)
+            let unfinishedSize = SnapGroupSupport.needsFinalReissue(
+                landedSize: settled.size,
+                requestedSize: desired.size,
+                knownMinimum: acceptedMinimums[member.windowID])
+            let misplaced = abs(settled.minX - desired.minX) > SnapGroupSupport.clampTolerance
+                || abs(settled.minY - desired.minY) > SnapGroupSupport.clampTolerance
+            guard unfinishedSize || misplaced else { continue }
+            SnapLog.event("link.settle-final",
+                          "windowID=\(member.windowID) action=\(member.action) "
+                              + "settled=\(SnapLog.rect(settled)) -> \(SnapLog.rect(desired)) "
+                              + "resizedFinal=\(SnapLog.rect(resizedLive)) "
+                              + "reason=\(unfinishedSize ? "size-never-landed" : "seam-or-anchor-drift")")
+            writeMember(desired, member: member)
         }
     }
 

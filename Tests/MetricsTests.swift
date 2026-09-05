@@ -7281,6 +7281,52 @@ struct MetricsTests {
                                                    accepted: CGSize(width: 756, height: 480)),
                "a minimum on the other axis counts just the same")
 
+        // MARK: The pass that runs once a drag stops
+
+        // Every step of a linked resize is corrected by the notification that
+        // follows it — except the last, which has none: the pointer stopped.
+        // The capture ended with the right half 810pt wide where 902pt had
+        // been asked for, so its right edge sat 92pt short of the screen for
+        // good.
+        let fsHeight: CGFloat = 949
+        expect(SnapGroupSupport.needsFinalReissue(landedSize: CGSize(width: 810, height: fsHeight),
+                                                  requestedSize: CGSize(width: 902, height: fsHeight),
+                                                  knownMinimum: nil),
+               "a closing write that never landed is re-issued once the drag stops")
+        expect(!SnapGroupSupport.needsFinalReissue(landedSize: CGSize(width: 902, height: fsHeight),
+                                                   requestedSize: CGSize(width: 902, height: fsHeight),
+                                                   knownMinimum: nil),
+               "a drag that finished cleanly is left alone")
+        expect(!SnapGroupSupport.needsFinalReissue(landedSize: CGSize(width: 901, height: fsHeight),
+                                                   requestedSize: CGSize(width: 902, height: fsHeight),
+                                                   knownMinimum: nil),
+               "and a point of rounding is not an unfinished write")
+        expect(!SnapGroupSupport.needsFinalReissue(landedSize: CGSize(width: 400, height: fsHeight),
+                                                   requestedSize: CGSize(width: 140, height: fsHeight),
+                                                   knownMinimum: CGSize(width: 400, height: fsHeight)),
+               "a window sitting at a minimum its app has already refused to go under is not re-asked")
+        expect(SnapGroupSupport.needsFinalReissue(landedSize: CGSize(width: 810, height: fsHeight),
+                                                  requestedSize: CGSize(width: 902, height: fsHeight),
+                                                  knownMinimum: CGSize(width: 400, height: fsHeight)),
+               "but a known minimum well below the requested size is no reason not to finish the write")
+
+        // The frame that pass asks for: the neighbour's theoretical zone with
+        // its shared edge moved to the resized window's final live edge, then
+        // held flush against its own screen edges. No gap, no overlap.
+        let fsRightZone = CGRect(x: 756, y: 0, width: 756, height: fsHeight)
+        let fsResizedFinal = CGRect(x: 0, y: 0, width: 602, height: fsHeight)
+        let fsSolo = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 1, action: .leftHalf, frame: CGRect(x: 0, y: 0, width: 756, height: fsHeight)),
+        ])
+        let fsSeam = SnapGroupSupport.clampedToAnchors(
+            SnapGroupSupport.freeSpace(for: .rightHalf, theoreticalZone: fsRightZone,
+                                       group: fsSolo, gap: 0, currentFrames: [1: fsResizedFinal]),
+            action: .rightHalf, theoreticalZone: fsRightZone)
+        expect(fsSeam == CGRect(x: 602, y: 0, width: 910, height: fsHeight),
+               "the neighbour ends exactly at the resized window's final edge and flush with the screen")
+        expect(fsSeam.minX == fsResizedFinal.maxX, "no overlap and no gap at the seam")
+        expect(fsSeam.maxX == 1512, "and no gap at the screen edge either")
+
         // MARK: A read-back that has not landed yet
 
         // The captured sequence, shrinking A so its right-half neighbour has

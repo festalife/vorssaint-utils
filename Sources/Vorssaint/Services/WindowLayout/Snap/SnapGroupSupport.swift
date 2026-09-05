@@ -431,6 +431,33 @@ enum SnapGroupSupport {
         return !unchanged
     }
 
+    /// Whether the final pass, run once a drag has stopped, should re-issue a
+    /// frame for a neighbour.
+    ///
+    /// The last write of a drag has no notification behind it to correct it:
+    /// the pointer stopped, so nothing else is coming. A capture ended with a
+    /// right half 92pt short of the screen for exactly that reason — its
+    /// closing write asked for 902pt wide and 810pt was what had landed when
+    /// everything went quiet.
+    ///
+    /// Re-issuing is pointless when the size asked for is one the app has
+    /// already been observed to refuse: that is not a write that failed to
+    /// land, it is a window at its own minimum, and asking again only churns.
+    static func needsFinalReissue(landedSize: CGSize,
+                                  requestedSize: CGSize,
+                                  knownMinimum: CGSize?,
+                                  tolerance: CGFloat = clampTolerance) -> Bool {
+        guard abs(landedSize.width - requestedSize.width) > tolerance
+                || abs(landedSize.height - requestedSize.height) > tolerance
+        else { return false }
+        if let knownMinimum,
+           requestedSize.width < knownMinimum.width - tolerance
+            || requestedSize.height < knownMinimum.height - tolerance {
+            return false
+        }
+        return true
+    }
+
     /// Whether a settle read may confirm an app-enforced minimum.
     ///
     /// Two conditions, and the second is the one a real capture found missing.
