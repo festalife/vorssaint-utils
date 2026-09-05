@@ -7281,6 +7281,41 @@ struct MetricsTests {
                                                    accepted: CGSize(width: 756, height: 480)),
                "a minimum on the other axis counts just the same")
 
+        // MARK: The settle keeps trying until the neighbour is flush
+
+        // After a seam drag the neighbour finished at 813, 836 or 898pt wide
+        // from run to run where 910 was asked for every time — its right edge
+        // tens of points short of the screen, differently on each run. That is
+        // a write that did not fully apply, not a decision any app made.
+        let srZone = CGRect(x: 756, y: 0, width: 756, height: 949)
+        expect(!SnapGroupSupport.isFlushWithAnchors(CGRect(x: 602, y: 0, width: 836, height: 949),
+                                                    action: .rightHalf, zone: srZone),
+               "a right half 836pt wide from x=602 is 74pt short of the screen edge, so it is not finished")
+        expect(SnapGroupSupport.isFlushWithAnchors(CGRect(x: 602, y: 0, width: 910, height: 949),
+                                                   action: .rightHalf, zone: srZone),
+               "at 910 it reaches the edge and is")
+        expect(SnapGroupSupport.isFlushWithAnchors(CGRect(x: 602, y: 0, width: 909, height: 949),
+                                                   action: .rightHalf, zone: srZone),
+               "a point of rounding still counts as flush")
+        expect(!SnapGroupSupport.isFlushWithAnchors(CGRect(x: 0, y: 0, width: 500, height: 900),
+                                                    action: .topLeft,
+                                                    zone: CGRect(x: 0, y: 474, width: 756, height: 475)),
+               "a corner has to be flush on both of its screen edges, not just one")
+
+        // The budget: keep going while it is neither flush nor at a known
+        // minimum, and never past the limit.
+        expect(SnapGroupSupport.settleAttemptLimit == 3, "three re-issues, then stop")
+        expect(SnapGroupSupport.shouldRetrySettle(attempt: 1, isFlush: false, hasConfirmedMinimum: false),
+               "an unfinished write is retried")
+        expect(SnapGroupSupport.shouldRetrySettle(attempt: 3, isFlush: false, hasConfirmedMinimum: false),
+               "up to and including the last attempt in the budget")
+        expect(!SnapGroupSupport.shouldRetrySettle(attempt: 4, isFlush: false, hasConfirmedMinimum: false),
+               "and never past it, so a window that cannot be placed costs a bounded number of writes")
+        expect(!SnapGroupSupport.shouldRetrySettle(attempt: 1, isFlush: true, hasConfirmedMinimum: false),
+               "a member already flush with its anchors is done")
+        expect(!SnapGroupSupport.shouldRetrySettle(attempt: 1, isFlush: false, hasConfirmedMinimum: true),
+               "and one whose app has been confirmed to refuse the size is where it is going to be")
+
         // MARK: The pass that runs once a drag stops
 
         // Every step of a linked resize is corrected by the notification that

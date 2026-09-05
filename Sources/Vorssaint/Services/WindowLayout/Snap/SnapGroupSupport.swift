@@ -431,6 +431,53 @@ enum SnapGroupSupport {
         return !unchanged
     }
 
+    /// Whether `frame` sits flush against every screen edge `action`'s zone is
+    /// anchored to — the one test that says whether a member has finished
+    /// landing where it belongs. A right half is flush when its `maxX` is the
+    /// screen's; a short width therefore reads as unfinished, which is exactly
+    /// what it is.
+    static func isFlushWithAnchors(_ frame: CGRect,
+                                   action: WindowLayoutAction,
+                                   zone: CGRect,
+                                   tolerance: CGFloat = clampTolerance) -> Bool {
+        let edges = anchoredEdges(for: action)
+        guard !edges.isEmpty else { return true }
+        return edges.allSatisfy { edge in
+            switch edge {
+            case .minX: return abs(frame.minX - zone.minX) <= tolerance
+            case .maxX: return abs(frame.maxX - zone.maxX) <= tolerance
+            case .minY: return abs(frame.minY - zone.minY) <= tolerance
+            case .maxY: return abs(frame.maxY - zone.maxY) <= tolerance
+            }
+        }
+    }
+
+    /// How many times the pass that runs after a drag will re-issue a frame
+    /// that has not landed.
+    static let settleAttemptLimit = 3
+
+    /// Whether that pass should try once more.
+    ///
+    /// One write is not reliably enough. After a seam drag the neighbour was
+    /// observed finishing at 813, 836 or 898pt wide from run to run where 910
+    /// was asked for every time — its right edge tens of points short of the
+    /// screen, differently on each run. Nothing about that is a decision the
+    /// app made: it is a write that did not fully apply and had nothing left
+    /// to correct it.
+    ///
+    /// Two ways to stop: the member is flush with its anchors, or its app has
+    /// been confirmed to refuse the size — in which case it is where it is
+    /// going to be and asking again would only churn. Otherwise, up to
+    /// `settleAttemptLimit` attempts, so a window that simply cannot be placed
+    /// costs a bounded number of writes rather than an endless retry.
+    static func shouldRetrySettle(attempt: Int,
+                                  isFlush: Bool,
+                                  hasConfirmedMinimum: Bool,
+                                  maxAttempts: Int = settleAttemptLimit) -> Bool {
+        guard !isFlush, !hasConfirmedMinimum else { return false }
+        return attempt <= maxAttempts
+    }
+
     /// Whether the final pass, run once a drag has stopped, should re-issue a
     /// frame for a neighbour.
     ///

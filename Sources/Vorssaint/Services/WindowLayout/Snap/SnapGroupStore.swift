@@ -1035,7 +1035,64 @@ final class SnapGroupStore {
                               + "resizedFinal=\(SnapLog.rect(resizedLive)) "
                               + "reason=\(unfinishedSize ? "size-never-landed" : "seam-or-anchor-drift")")
             writeMember(desired, member: member)
+            scheduleSettleRetry(member: member, desired: desired, attempt: 1,
+                                resizedWindowID: resizedWindowID, token: token)
         }
+    }
+
+    private func scheduleSettleRetry(member: SnapGroupMember,
+                                     desired: CGRect,
+                                     attempt: Int,
+                                     resizedWindowID: CGWindowID,
+                                     token: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dragIdleDelay) { [weak self] in
+            self?.retrySettle(member: member, desired: desired, attempt: attempt,
+                              resizedWindowID: resizedWindowID, token: token)
+        }
+    }
+
+    /// One write is not reliably enough to finish a drag. The neighbour was
+    /// observed ending at 813, 836 or 898pt wide from run to run where 910 was
+    /// asked for every time — its right edge tens of points short of the
+    /// screen, differently on each run, with nothing left to correct it.
+    ///
+    /// So the settle re-reads and re-issues the same frame until the member is
+    /// flush with its own anchored edges, its app is confirmed to refuse the
+    /// size, or the attempt budget runs out. A new drag on the resized window
+    /// supersedes the whole chain through `finalSettleToken`.
+    private func retrySettle(member: SnapGroupMember,
+                             desired: CGRect,
+                             attempt: Int,
+                             resizedWindowID: CGWindowID,
+                             token: Int) {
+        guard finalSettleToken[resizedWindowID] == token else { return }
+        guard watcherEnabled, AppFeature.windowLayout.isAvailable, AXIsProcessTrusted(),
+              let element = watcher.element(for: member.windowID),
+              let settled = SnapAX.frame(of: element)
+        else { return }
+        observe(settled, for: member.windowID)
+        framesCache.removeAll()
+
+        let isFlush = SnapGroupSupport.isFlushWithAnchors(settled, action: member.action, zone: member.frame)
+        let hasMinimum = acceptedMinimums[member.windowID] != nil
+        guard SnapGroupSupport.shouldRetrySettle(attempt: attempt,
+                                                 isFlush: isFlush,
+                                                 hasConfirmedMinimum: hasMinimum)
+        else {
+            SnapLog.event("link.settle-done",
+                          "windowID=\(member.windowID) attempts=\(attempt - 1) "
+                              + "settled=\(SnapLog.rect(settled)) flush=\(isFlush) minimum=\(hasMinimum)")
+            return
+        }
+        SnapLog.event("link.settle-retry",
+                      "n=\(attempt) windowID=\(member.windowID) settled=\(SnapLog.rect(settled)) "
+                          + "-> \(SnapLog.rect(desired))")
+        // `writeMember` derives the origin from the requested size and
+        // `SnapAX.setFrame` writes size before position, so every attempt asks
+        // for exactly the same, self-consistent frame.
+        writeMember(desired, member: member)
+        scheduleSettleRetry(member: member, desired: desired, attempt: attempt + 1,
+                            resizedWindowID: resizedWindowID, token: token)
     }
 
     private static func describe(_ group: SnapGroup) -> String {
