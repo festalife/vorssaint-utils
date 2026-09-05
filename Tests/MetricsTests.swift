@@ -14320,6 +14320,87 @@ struct MetricsTests {
                 && FanControlPolicy.menuBarWidthUnits(fanCount: 0) == 0,
                "fan RPM menu bar width reserves one or several five-digit readings")
 
+        // MARK: - Fan profiles
+
+        let fanStrings = FanControlFeatureStrings.enUS
+        let systemProfile = FanProfile(id: "custom-system", name: "My System", kind: .system)
+        let manualProfile = FanProfile(id: "custom-manual", name: "My Manual",
+                                       kind: .manual(level: 40, duration: .oneHour))
+        let curveProfile = FanProfile(id: "custom-curve", name: "My Curve",
+                                      kind: .curve(points: defaultCurve.points, temperatureSource: .hottestSoC))
+        expect(systemProfile.configuration == FanControlConfiguration(mode: .system,
+                                                                       manualLevel: FanControlPolicy.defaultCoolingLevel,
+                                                                       curves: [], manualDuration: .untilChanged)
+                && manualProfile.configuration == .manual(level: 40, duration: .oneHour)
+                && curveProfile.configuration == .curve([FanControlCurve(sensor: .hottestSoC,
+                                                                         points: defaultCurve.points)]),
+               "a profile's kind maps to the exact configuration it should apply")
+
+        expect(FanProfile.makeCustom(name: "n", from: .manual(level: 60)).kind
+                == .manual(level: 60, duration: .untilChanged)
+                && FanProfile.makeCustom(name: "n", from: .curve([defaultCurve, cpuCurve])).kind
+                == .curve(points: defaultCurve.points, temperatureSource: defaultCurve.sensor)
+                && FanProfile.makeCustom(name: "n",
+                                        from: FanControlConfiguration(mode: .system, manualLevel: 55,
+                                                                      curves: [defaultCurve],
+                                                                      manualDuration: .thirtyMinutes)).kind == .system,
+               "capturing the current configuration into a profile maps the other direction too, keeping only the first curve")
+
+        expect(manualProfile.matches(.manual(level: 40, duration: .oneHour))
+                && !manualProfile.matches(.manual(level: 41, duration: .oneHour))
+                && !manualProfile.matches(.manual(level: 40, duration: .twoHours))
+                && !manualProfile.matches(.curve([defaultCurve])),
+               "a profile matches only the exact configuration it applies")
+
+        let builtIns = FanProfileBuiltIn.defaultProfiles(fanStrings)
+        expect(builtIns.map(\.id) == ["builtin.silent", "builtin.balanced", "builtin.performance"]
+                && builtIns.allSatisfy(\.isBuiltIn)
+                && builtIns[0].kind == .manual(level: 25, duration: .untilChanged)
+                && builtIns[1].kind == .system
+                && builtIns[2].kind == .manual(level: 75, duration: .untilChanged)
+                && builtIns.map { $0.displayName(fanStrings) } == [fanStrings.profileSilent,
+                                                                    fanStrings.profileBalanced,
+                                                                    fanStrings.profilePerformance]
+                && !manualProfile.isBuiltIn,
+               "the three built-in presets exist with the documented levels and translated names, and customs are not built-in")
+
+        // A built-in's displayed name always re-resolves from `strings`,
+        // ignoring whatever was stored — simulating a stale name from before
+        // a language change.
+        let staleBuiltIn = FanProfile(id: FanProfileBuiltIn.silent.id, name: "(stale)", kind: .manual(level: 25, duration: .untilChanged))
+        expect(staleBuiltIn.displayName(fanStrings) == fanStrings.profileSilent,
+               "a built-in's display name ignores its stored name and always re-translates")
+
+        expect(FanProfile.activeProfile(matching: .manual(level: 25, duration: .untilChanged), in: builtIns)?.id
+                == FanProfileBuiltIn.silent.id
+                && FanProfile.activeProfile(matching: .manual(level: 26, duration: .untilChanged), in: builtIns) == nil
+                && FanProfile.activeProfile(
+                    matching: FanControlConfiguration(mode: .system, manualLevel: FanControlPolicy.defaultCoolingLevel,
+                                                      curves: [], manualDuration: .untilChanged),
+                    in: builtIns)?.id == FanProfileBuiltIn.balanced.id,
+               "the active profile is whichever stored profile's configuration matches the live controls, or none")
+
+        // Decoding an array with one entry of an unrecognized `kind` (as a
+        // newer app version might have written) must not lose the rest.
+        let keepProfile = FanProfile(id: "keep", name: "Keep", kind: .system)
+        let futureProfile = FanProfile(id: "future", name: "Future",
+                                       kind: .manual(level: 50, duration: .untilChanged))
+        if let encodedPair = FanProfile.encodeArray([keepProfile, futureProfile]) {
+            let corrupted = encodedPair.replacingOccurrences(of: "\"manual\"", with: "\"mysteryKind\"")
+            expect(FanProfile.decodeArray(corrupted) == [keepProfile],
+                   "a stored profile with an unrecognized kind is skipped, not fatal to the rest of the array")
+        } else {
+            expect(false, "fan profiles failed to encode")
+        }
+        expect(FanProfile.decodeArray("not json").isEmpty,
+               "malformed profile storage decodes to no profiles rather than crashing")
+
+        expect(FanProfile.migratedProfiles(storedValue: nil, strings: fanStrings) == builtIns
+                && FanProfile.migratedProfiles(storedValue: "[]", strings: fanStrings) == builtIns
+                && FanProfile.migratedProfiles(storedValue: FanProfile.encodeArray([keepProfile]) ?? "",
+                                               strings: fanStrings) == [keepProfile],
+               "migration seeds the three built-ins only when nothing (or nothing usable) was stored yet")
+
         let floatRPM = SMCValueCodec.encode(4_850, type: "flt ", size: 4)
         expect(floatRPM.flatMap { SMCValueCodec.decode($0, type: "flt ") } == 4_850,
                "native fan RPM floats round-trip exactly")
@@ -14389,7 +14470,7 @@ struct MetricsTests {
         for language in AppLanguage.allCases {
             let strings = FeatureStrings.fanControl(language)
             let values = Mirror(reflecting: strings).children.compactMap { $0.value as? String }
-            expect(values.count == 50 && values.allSatisfy { !$0.isEmpty },
+            expect(values.count == 64 && values.allSatisfy { !$0.isEmpty },
                    "fan control has every localized field for \(language.rawValue)")
             expect(values.allSatisfy { !$0.contains("—") },
                    "fan control text uses human punctuation for \(language.rawValue)")

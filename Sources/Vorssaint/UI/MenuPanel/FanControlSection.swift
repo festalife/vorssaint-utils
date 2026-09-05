@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AppKit
 import SwiftUI
 
 struct FanControlSection: View {
@@ -13,6 +14,8 @@ struct FanControlSection: View {
         FanControlConfiguration.defaultCurvesStorage
     @AppStorage(DefaultsKey.fanControlManualDuration) private var manualDurationRaw =
         FanControlManualDuration.untilChanged.rawValue
+    @AppStorage(DefaultsKey.fanControlProfiles) private var profilesStorage = "[]"
+    @AppStorage(DefaultsKey.fanControlActiveProfileID) private var activeProfileID = ""
     @AppStorage(DefaultsKey.temperatureUnit) private var temperatureUnit =
         TemperatureUnit.celsius.rawValue
     var collapsible = true
@@ -33,10 +36,13 @@ struct FanControlSection: View {
                                   coolingLevel: $coolingLevel,
                                   manualDuration: manualDurationBinding,
                                   curves: curvesBinding,
+                                  profiles: profiles,
                                   temperatureUnit: displayTemperatureUnit,
                                   authorize: service.authorize,
                                   applyConfiguration: service.applyConfiguration,
-                                  stopCooling: service.restoreAutomatic)
+                                  stopCooling: service.restoreAutomatic,
+                                  applyProfile: apply(_:),
+                                  saveCurrentAsProfile: saveCurrentAsProfile)
                 .panelCard()
                 .onAppear { service.panelDidAppear() }
                 .onDisappear { service.panelDidDisappear() }
@@ -74,6 +80,58 @@ struct FanControlSection: View {
     private var displayTemperatureUnit: TemperatureUnit {
         TemperatureUnit(rawValue: temperatureUnit) ?? .celsius
     }
+
+    private var profiles: [FanProfile] {
+        FanProfile.decodeArray(profilesStorage)
+    }
+
+    /// Applies a profile exactly through the same path a hand-set mode/level/
+    /// duration/curve would take: fill the pending controls with what the
+    /// profile represents, remember it as the last explicit selection, then
+    /// hand the resulting configuration to `applyConfiguration` — the panel's
+    /// one-click switch.
+    private func apply(_ profile: FanProfile) {
+        let configuration = profile.configuration
+        modeRaw = configuration.mode.rawValue
+        coolingLevel = configuration.manualLevel
+        manualDurationRaw = configuration.manualDuration.rawValue
+        if configuration.mode == .curve, let encoded = FanControlConfiguration.encodeCurves(configuration.curves) {
+            curvesStorage = encoded
+        }
+        activeProfileID = profile.id
+        service.applyConfiguration(configuration)
+    }
+
+    /// "Save as profile…": prompts for a name with a native text-field alert,
+    /// then stores the currently pending mode/level/duration/curve as a new
+    /// custom profile. No window is required — this panel is a popover, not
+    /// a sheet-owning window — so a modal `runModal()` alert matches how the
+    /// rest of the app already asks quick yes/no questions from the menu bar.
+    private func saveCurrentAsProfile() {
+        let field = NSTextField(string: "")
+        field.placeholderString = strings.profileNamePlaceholder
+        field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        let alert = NSAlert()
+        alert.messageText = strings.profileNamePrompt
+        alert.accessoryView = field
+        alert.addButton(withTitle: strings.saveProfileButton)
+        alert.addButton(withTitle: strings.cancelButton)
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let configuration = FanControlConfiguration(mode: modeBinding.wrappedValue,
+                                                    manualLevel: coolingLevel,
+                                                    curves: curvesBinding.wrappedValue,
+                                                    manualDuration: manualDurationBinding.wrappedValue)
+        let profile = FanProfile.makeCustom(name: name, from: configuration)
+        var updated = profiles
+        updated.append(profile)
+        if let encoded = FanProfile.encodeArray(updated) {
+            profilesStorage = encoded
+        }
+        activeProfileID = profile.id
+    }
 }
 
 struct FanControlCardContent: View {
@@ -87,10 +145,13 @@ struct FanControlCardContent: View {
     @Binding var coolingLevel: Int
     @Binding var manualDuration: FanControlManualDuration
     @Binding var curves: [FanControlCurve]
+    let profiles: [FanProfile]
     let temperatureUnit: TemperatureUnit
     let authorize: () -> Void
     let applyConfiguration: (FanControlConfiguration) -> Void
     let stopCooling: () -> Void
+    let applyProfile: (FanProfile) -> Void
+    let saveCurrentAsProfile: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -106,6 +167,7 @@ struct FanControlCardContent: View {
             }
 
             if canConfigure {
+                profilesRow
                 modePicker
                 switch mode {
                 case .system:
@@ -134,6 +196,78 @@ struct FanControlCardContent: View {
                     .font(.system(size: 9.5))
                     .foregroundStyle(Color.secondary.opacity(0.84))
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// What the pending (not-yet-applied) controls currently represent, used
+    /// to highlight the matching profile chip. Built the same way the
+    /// `applyConfiguration` calls below build it — `.manual`/system-shaped
+    /// configurations always carry an empty `curves`, matching what
+    /// `FanProfile.configuration` produces for those kinds — so a profile in
+    /// manual or system mode can match regardless of whatever curve was last
+    /// edited, instead of comparing against a `curves` array that mode never
+    /// actually sends.
+    private var pendingConfiguration: FanControlConfiguration {
+        switch mode {
+        case .system:
+            return FanControlConfiguration(mode: .system,
+                                           manualLevel: FanControlPolicy.defaultCoolingLevel,
+                                           curves: [], manualDuration: .untilChanged)
+        case .manual:
+            return .manual(level: coolingLevel, duration: manualDuration)
+        case .curve:
+            return .curve(curves)
+        }
+    }
+
+    /// A one-click row of saved profiles above the mode picker. A compact
+    /// menu picker is used once there are more than four profiles — a
+    /// segmented control stops reading well as a single row past that count —
+    /// but either way this is a native `Picker`, never a custom dropdown.
+    @ViewBuilder
+    private var profilesRow: some View {
+        if !profiles.isEmpty {
+            let selection = Binding<String?>(
+                get: { FanProfile.activeProfile(matching: pendingConfiguration, in: profiles)?.id },
+                set: { newID in
+                    guard let newID, let profile = profiles.first(where: { $0.id == newID }) else { return }
+                    applyProfile(profile)
+                }
+            )
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(strings.profilesLabel)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(action: saveCurrentAsProfile) {
+                        Image(systemName: "plus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .help(strings.saveAsProfile)
+                    .disabled(isWorking)
+                }
+                Group {
+                    if profiles.count > 4 {
+                        Picker(strings.profilesLabel, selection: selection) {
+                            ForEach(profiles) { profile in
+                                Text(profile.displayName(strings)).tag(Optional(profile.id))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        Picker(strings.profilesLabel, selection: selection) {
+                            ForEach(profiles) { profile in
+                                Text(profile.displayName(strings)).tag(Optional(profile.id))
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .disabled(isWorking)
             }
         }
     }

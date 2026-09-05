@@ -54,6 +54,66 @@ struct FanControlFeatureStrings {
     let duration4Hours: String
     let durationUntilChanged: String
     let minutesRemainingFormat: String
+    let profilesLabel: String
+    let profileSilent: String
+    let profileBalanced: String
+    let profilePerformance: String
+    let saveAsProfile: String
+    let profileNamePrompt: String
+    let profileNamePlaceholder: String
+    let saveProfileButton: String
+    let cancelButton: String
+    let renameProfile: String
+    let deleteProfile: String
+    let duplicateProfile: String
+    let profileRenamePrompt: String
+    let profileCopySuffixFormat: String
+}
+
+extension FanProfileBuiltIn {
+    /// The translated preset name. `FanControlSupport.swift` (which also
+    /// compiles into the privileged helper) knows only this case's `id` and
+    /// `kind`; the display name lives here instead, alongside the other
+    /// per-language fan control strings.
+    func name(_ strings: FanControlFeatureStrings) -> String {
+        switch self {
+        case .silent: return strings.profileSilent
+        case .balanced: return strings.profileBalanced
+        case .performance: return strings.profilePerformance
+        }
+    }
+
+    /// `name` here only seeds the stored value for the (rare) reader that
+    /// looks at it directly; every display path calls
+    /// `FanProfile.displayName(_:)` instead, which re-translates on read.
+    func makeProfile(_ strings: FanControlFeatureStrings) -> FanProfile {
+        FanProfile(id: id, name: name(strings), kind: kind)
+    }
+
+    static func defaultProfiles(_ strings: FanControlFeatureStrings) -> [FanProfile] {
+        allCases.map { $0.makeProfile(strings) }
+    }
+}
+
+extension FanProfile {
+    /// The label to show in the UI: a built-in always resolves its current
+    /// translation, ignoring whatever name happened to be stored for it;
+    /// everything else uses the name the user gave it.
+    func displayName(_ strings: FanControlFeatureStrings) -> String {
+        builtIn?.name(strings) ?? name
+    }
+
+    /// What `fanControlProfiles` should hold given whatever was previously
+    /// stored: the stored profiles as-is if there are any (even if the user
+    /// deleted every custom one down to nothing but kept editing — no,
+    /// built-ins can't be deleted, so "stored but empty" only happens before
+    /// first seeding), or the three built-ins on a genuinely first run.
+    static func migratedProfiles(storedValue: String?,
+                                 strings: FanControlFeatureStrings) -> [FanProfile] {
+        guard let storedValue else { return FanProfileBuiltIn.defaultProfiles(strings) }
+        let decoded = decodeArray(storedValue)
+        return decoded.isEmpty ? FanProfileBuiltIn.defaultProfiles(strings) : decoded
+    }
 }
 
 extension FanControlFeatureStrings {
@@ -140,7 +200,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 hours",
         duration4Hours: "4 hours",
         durationUntilChanged: "Until I change it",
-        minutesRemainingFormat: "%d min left"
+        minutesRemainingFormat: "%d min left",
+        profilesLabel: "Profiles",
+        profileSilent: "Silent",
+        profileBalanced: "Balanced",
+        profilePerformance: "Performance",
+        saveAsProfile: "Save as profile…",
+        profileNamePrompt: "Name this profile",
+        profileNamePlaceholder: "Profile name",
+        saveProfileButton: "Save",
+        cancelButton: "Cancel",
+        renameProfile: "Rename",
+        deleteProfile: "Delete",
+        duplicateProfile: "Duplicate",
+        profileRenamePrompt: "Rename profile",
+        profileCopySuffixFormat: "%@ copy"
     )
 
     static let ptBR = FanControlFeatureStrings(
@@ -193,7 +267,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 horas",
         duration4Hours: "4 horas",
         durationUntilChanged: "Até eu mudar",
-        minutesRemainingFormat: "%d min restantes"
+        minutesRemainingFormat: "%d min restantes",
+        profilesLabel: "Perfis",
+        profileSilent: "Silencioso",
+        profileBalanced: "Equilibrado",
+        profilePerformance: "Desempenho",
+        saveAsProfile: "Salvar como perfil…",
+        profileNamePrompt: "Nomeie este perfil",
+        profileNamePlaceholder: "Nome do perfil",
+        saveProfileButton: "Salvar",
+        cancelButton: "Cancelar",
+        renameProfile: "Renomear",
+        deleteProfile: "Excluir",
+        duplicateProfile: "Duplicar",
+        profileRenamePrompt: "Renomear perfil",
+        profileCopySuffixFormat: "Cópia de %@"
     )
 
     static let tr = FanControlFeatureStrings(
@@ -246,7 +334,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 saat",
         duration4Hours: "4 saat",
         durationUntilChanged: "Değiştirene kadar",
-        minutesRemainingFormat: "%d dk kaldı"
+        minutesRemainingFormat: "%d dk kaldı",
+        profilesLabel: "Profiller",
+        profileSilent: "Sessiz",
+        profileBalanced: "Dengeli",
+        profilePerformance: "Performans",
+        saveAsProfile: "Profil olarak kaydet…",
+        profileNamePrompt: "Bu profili adlandırın",
+        profileNamePlaceholder: "Profil adı",
+        saveProfileButton: "Kaydet",
+        cancelButton: "İptal",
+        renameProfile: "Yeniden adlandır",
+        deleteProfile: "Sil",
+        duplicateProfile: "Çoğalt",
+        profileRenamePrompt: "Profili yeniden adlandır",
+        profileCopySuffixFormat: "%@ kopyası"
     )
 
     static let ru = FanControlFeatureStrings(
@@ -299,7 +401,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 часа",
         duration4Hours: "4 часа",
         durationUntilChanged: "Пока не изменю",
-        minutesRemainingFormat: "Осталось %d мин"
+        minutesRemainingFormat: "Осталось %d мин",
+        profilesLabel: "Профили",
+        profileSilent: "Тихий",
+        profileBalanced: "Сбалансированный",
+        profilePerformance: "Производительность",
+        saveAsProfile: "Сохранить как профиль…",
+        profileNamePrompt: "Назовите этот профиль",
+        profileNamePlaceholder: "Название профиля",
+        saveProfileButton: "Сохранить",
+        cancelButton: "Отмена",
+        renameProfile: "Переименовать",
+        deleteProfile: "Удалить",
+        duplicateProfile: "Дублировать",
+        profileRenamePrompt: "Переименовать профиль",
+        profileCopySuffixFormat: "Копия %@"
     )
 
     static let es = FanControlFeatureStrings(
@@ -352,7 +468,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 horas",
         duration4Hours: "4 horas",
         durationUntilChanged: "Hasta que lo cambie",
-        minutesRemainingFormat: "%d min restantes"
+        minutesRemainingFormat: "%d min restantes",
+        profilesLabel: "Perfiles",
+        profileSilent: "Silencioso",
+        profileBalanced: "Equilibrado",
+        profilePerformance: "Rendimiento",
+        saveAsProfile: "Guardar como perfil…",
+        profileNamePrompt: "Nombra este perfil",
+        profileNamePlaceholder: "Nombre del perfil",
+        saveProfileButton: "Guardar",
+        cancelButton: "Cancelar",
+        renameProfile: "Cambiar nombre",
+        deleteProfile: "Eliminar",
+        duplicateProfile: "Duplicar",
+        profileRenamePrompt: "Cambiar nombre del perfil",
+        profileCopySuffixFormat: "Copia de %@"
     )
 
     static let de = FanControlFeatureStrings(
@@ -405,7 +535,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 Stunden",
         duration4Hours: "4 Stunden",
         durationUntilChanged: "Bis ich es ändere",
-        minutesRemainingFormat: "Noch %d Min."
+        minutesRemainingFormat: "Noch %d Min.",
+        profilesLabel: "Profile",
+        profileSilent: "Leise",
+        profileBalanced: "Ausgewogen",
+        profilePerformance: "Leistung",
+        saveAsProfile: "Als Profil speichern…",
+        profileNamePrompt: "Profil benennen",
+        profileNamePlaceholder: "Profilname",
+        saveProfileButton: "Speichern",
+        cancelButton: "Abbrechen",
+        renameProfile: "Umbenennen",
+        deleteProfile: "Löschen",
+        duplicateProfile: "Duplizieren",
+        profileRenamePrompt: "Profil umbenennen",
+        profileCopySuffixFormat: "%@ Kopie"
     )
 
     static let fr = FanControlFeatureStrings(
@@ -458,7 +602,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 heures",
         duration4Hours: "4 heures",
         durationUntilChanged: "Jusqu’à ce que je le change",
-        minutesRemainingFormat: "%d min restantes"
+        minutesRemainingFormat: "%d min restantes",
+        profilesLabel: "Profils",
+        profileSilent: "Silencieux",
+        profileBalanced: "Équilibré",
+        profilePerformance: "Performance",
+        saveAsProfile: "Enregistrer comme profil…",
+        profileNamePrompt: "Nommez ce profil",
+        profileNamePlaceholder: "Nom du profil",
+        saveProfileButton: "Enregistrer",
+        cancelButton: "Annuler",
+        renameProfile: "Renommer",
+        deleteProfile: "Supprimer",
+        duplicateProfile: "Dupliquer",
+        profileRenamePrompt: "Renommer le profil",
+        profileCopySuffixFormat: "Copie de %@"
     )
 
     static let it = FanControlFeatureStrings(
@@ -511,7 +669,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2 ore",
         duration4Hours: "4 ore",
         durationUntilChanged: "Finché non lo cambio",
-        minutesRemainingFormat: "%d min rimanenti"
+        minutesRemainingFormat: "%d min rimanenti",
+        profilesLabel: "Profili",
+        profileSilent: "Silenzioso",
+        profileBalanced: "Bilanciato",
+        profilePerformance: "Prestazioni",
+        saveAsProfile: "Salva come profilo…",
+        profileNamePrompt: "Assegna un nome al profilo",
+        profileNamePlaceholder: "Nome del profilo",
+        saveProfileButton: "Salva",
+        cancelButton: "Annulla",
+        renameProfile: "Rinomina",
+        deleteProfile: "Elimina",
+        duplicateProfile: "Duplica",
+        profileRenamePrompt: "Rinomina profilo",
+        profileCopySuffixFormat: "Copia di %@"
     )
 
     static let ja = FanControlFeatureStrings(
@@ -564,7 +736,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2時間",
         duration4Hours: "4時間",
         durationUntilChanged: "変更するまで",
-        minutesRemainingFormat: "残り%d分"
+        minutesRemainingFormat: "残り%d分",
+        profilesLabel: "プロファイル",
+        profileSilent: "静音",
+        profileBalanced: "バランス",
+        profilePerformance: "パフォーマンス",
+        saveAsProfile: "プロファイルとして保存…",
+        profileNamePrompt: "このプロファイルに名前を付ける",
+        profileNamePlaceholder: "プロファイル名",
+        saveProfileButton: "保存",
+        cancelButton: "キャンセル",
+        renameProfile: "名前を変更",
+        deleteProfile: "削除",
+        duplicateProfile: "複製",
+        profileRenamePrompt: "プロファイル名を変更",
+        profileCopySuffixFormat: "%@のコピー"
     )
 
     static let ko = FanControlFeatureStrings(
@@ -617,7 +803,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2시간",
         duration4Hours: "4시간",
         durationUntilChanged: "변경할 때까지",
-        minutesRemainingFormat: "%d분 남음"
+        minutesRemainingFormat: "%d분 남음",
+        profilesLabel: "프로필",
+        profileSilent: "저소음",
+        profileBalanced: "균형",
+        profilePerformance: "성능",
+        saveAsProfile: "프로필로 저장…",
+        profileNamePrompt: "이 프로필의 이름 지정",
+        profileNamePlaceholder: "프로필 이름",
+        saveProfileButton: "저장",
+        cancelButton: "취소",
+        renameProfile: "이름 변경",
+        deleteProfile: "삭제",
+        duplicateProfile: "복제",
+        profileRenamePrompt: "프로필 이름 변경",
+        profileCopySuffixFormat: "%@ 사본"
     )
 
     static let zhHans = FanControlFeatureStrings(
@@ -670,7 +870,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2小时",
         duration4Hours: "4小时",
         durationUntilChanged: "直到我更改",
-        minutesRemainingFormat: "剩余%d分钟"
+        minutesRemainingFormat: "剩余%d分钟",
+        profilesLabel: "配置文件",
+        profileSilent: "静音",
+        profileBalanced: "均衡",
+        profilePerformance: "性能",
+        saveAsProfile: "存为配置文件…",
+        profileNamePrompt: "为此配置文件命名",
+        profileNamePlaceholder: "配置文件名称",
+        saveProfileButton: "存储",
+        cancelButton: "取消",
+        renameProfile: "重命名",
+        deleteProfile: "删除",
+        duplicateProfile: "复制",
+        profileRenamePrompt: "重命名配置文件",
+        profileCopySuffixFormat: "%@副本"
     )
 
     static let zhTW = FanControlFeatureStrings(
@@ -723,7 +937,21 @@ extension FanControlFeatureStrings {
         duration2Hours: "2小時",
         duration4Hours: "4小時",
         durationUntilChanged: "直到我變更",
-        minutesRemainingFormat: "剩餘%d分鐘"
+        minutesRemainingFormat: "剩餘%d分鐘",
+        profilesLabel: "設定檔",
+        profileSilent: "靜音",
+        profileBalanced: "均衡",
+        profilePerformance: "效能",
+        saveAsProfile: "另存為設定檔…",
+        profileNamePrompt: "為此設定檔命名",
+        profileNamePlaceholder: "設定檔名稱",
+        saveProfileButton: "儲存",
+        cancelButton: "取消",
+        renameProfile: "重新命名",
+        deleteProfile: "刪除",
+        duplicateProfile: "複製",
+        profileRenamePrompt: "重新命名設定檔",
+        profileCopySuffixFormat: "%@副本"
     )
 
     static let zhHK = FanControlFeatureStrings(
@@ -776,6 +1004,20 @@ extension FanControlFeatureStrings {
         duration2Hours: "2小時",
         duration4Hours: "4小時",
         durationUntilChanged: "直到我變更",
-        minutesRemainingFormat: "剩餘%d分鐘"
+        minutesRemainingFormat: "剩餘%d分鐘",
+        profilesLabel: "設定檔",
+        profileSilent: "靜音",
+        profileBalanced: "均衡",
+        profilePerformance: "效能",
+        saveAsProfile: "另存為設定檔…",
+        profileNamePrompt: "為此設定檔命名",
+        profileNamePlaceholder: "設定檔名稱",
+        saveProfileButton: "儲存",
+        cancelButton: "取消",
+        renameProfile: "重新命名",
+        deleteProfile: "刪除",
+        duplicateProfile: "複製",
+        profileRenamePrompt: "重新命名設定檔",
+        profileCopySuffixFormat: "%@副本"
     )
 }
