@@ -7281,6 +7281,54 @@ struct MetricsTests {
                                                    accepted: CGSize(width: 756, height: 480)),
                "a minimum on the other axis counts just the same")
 
+        // MARK: A read-back that has not landed yet
+
+        // The captured sequence, shrinking A so its right-half neighbour has
+        // to grow leftward: B goes from (756,0 756x949) to a requested
+        // (729,0 783x949), and the immediate read-back is (729,0 756x949) —
+        // the new origin with the old size, because Accessibility applies the
+        // two independently. Every conclusion from that frame is wrong: its
+        // right edge sits 27pt short of the screen, so an anchor check
+        // "corrects" B back to its zone and undoes the growth, one step per
+        // drag sample.
+        let wlHeight: CGFloat = 949
+        let wlPreWrite = CGSize(width: 756, height: wlHeight)
+        let wlRequested = CGSize(width: 783, height: wlHeight)
+        let wlNotLandedRead = CGRect(x: 729, y: 0, width: 756, height: wlHeight)
+
+        expect(!SnapGroupSupport.writeLanded(preWriteSize: wlPreWrite,
+                                             requestedSize: wlRequested,
+                                             accepted: wlNotLandedRead.size),
+               "a read still showing the pre-write size has not landed, whatever its origin says")
+        expect(SnapGroupSupport.writeLanded(preWriteSize: wlPreWrite,
+                                            requestedSize: wlRequested,
+                                            accepted: CGSize(width: 783, height: wlHeight)),
+               "the same read once the size has applied is usable")
+        expect(SnapGroupSupport.writeLanded(preWriteSize: wlPreWrite,
+                                            requestedSize: wlPreWrite,
+                                            accepted: wlPreWrite),
+               "a write that asked for the size the window already had has nothing to land")
+        expect(SnapGroupSupport.writeLanded(preWriteSize: nil,
+                                            requestedSize: wlRequested,
+                                            accepted: wlPreWrite),
+               "with no pre-write size recorded there is nothing to compare, so the read stands")
+
+        // Nothing may be concluded from the not-landed read: it is not a
+        // minimum either.
+        expect(!SnapGroupSupport.confirmsMinimum(settledSize: wlNotLandedRead.size,
+                                                 latestRequestedSize: wlRequested,
+                                                 settledGeneration: 1, latestGeneration: 1),
+               "and it is not a minimum-size clamp either, being smaller than requested")
+
+        // And this is the damage the anchor check would have done from it.
+        let wlRightZone = CGRect(x: 756, y: 0, width: 756, height: wlHeight)
+        expect(SnapGroupSupport.reanchoredFrame(action: .rightHalf, zone: wlRightZone,
+                                                acceptedSize: wlNotLandedRead.size)
+               == wlRightZone,
+               "re-anchoring that frame would put B back on its zone exactly, cancelling the growth")
+        expect(wlNotLandedRead.maxX == 1485,
+               "which is why its 27pt-short right edge looked like an anchor violation")
+
         // MARK: A minimum is confirmed only against the latest request
 
         // The captured sequence. One seam drag issues writes faster than they

@@ -69,7 +69,7 @@ final class SnapGroupStore {
     /// a confirmation read routinely arrives after newer requests have gone
     /// out; without these it would be judged against a request the drag had
     /// already moved past. See `SnapGroupSupport.confirmsMinimum`.
-    private var latestRequest: [CGWindowID: (size: CGSize, generation: Int)] = [:]
+    private var latestRequest: [CGWindowID: (size: CGSize, preWriteSize: CGSize?, generation: Int)] = [:]
     private var requestCounter = 0
 
     /// Frames this store wrote itself, and when. The AX notification a write
@@ -590,45 +590,29 @@ final class SnapGroupStore {
         return actual
     }
 
-    /// Writes a frame for a group member, keeping it flush with every screen
-    /// edge its zone is anchored to — both in what is asked for (the origin is
-    /// derived from the size, so a right-anchored member can never be *asked*
-    /// for a frame that leaves a gap at the screen edge) and in what comes
-    /// back (a result off its anchors is corrected straight away).
+    /// Writes a frame for a group member, always asking for the origin that
+    /// belongs to the requested size against the member's anchored edges — so
+    /// a right-anchored member is never *asked* for a frame that would leave a
+    /// gap at the screen edge.
     ///
-    /// This is the backstop that makes a wrong minimum survivable: even if
-    /// something else decides a member cannot be narrower than it really is,
-    /// the member still ends flush with its own screen edge rather than
-    /// drifting inward and leaving a gap.
+    /// It deliberately draws no conclusion from the read-back. Accessibility
+    /// applies position and size independently, and the immediate read
+    /// routinely shows the new origin with the old size; judging anchoring
+    /// there saw a right edge 27pt short of the screen and "corrected" the
+    /// window straight back to its zone, undoing every step of a drag that
+    /// grew it. Both the anchor check and the minimum-size check happen in
+    /// `confirmClamps`, on a settled read, behind the generation guard.
     @discardableResult
     private func writeMember(_ rect: CGRect, member: SnapGroupMember) -> CGRect? {
         let anchored = SnapGroupSupport.reanchoredFrame(action: member.action,
                                                         zone: member.frame,
                                                         acceptedSize: rect.size)
+        // Read before the write: what the window's size was going in is what
+        // tells a landed read from one that has not applied yet.
+        let preWriteSize = lastLiveFrames[member.windowID]?.frame.size
         requestCounter += 1
-        latestRequest[member.windowID] = (anchored.size, requestCounter)
-        guard let actual = write(anchored, to: member.windowID) else { return nil }
-
-        // A size the app accepted that is smaller than the floor we thought it
-        // had disproves that floor — it was never real, or is no longer.
-        if let remembered = acceptedMinimums[member.windowID],
-           SnapGroupSupport.disprovesMinimum(remembered: remembered, accepted: actual.size) {
-            acceptedMinimums.removeValue(forKey: member.windowID)
-            SnapLog.event("link.minimum-dropped",
-                          "windowID=\(member.windowID) remembered=\(SnapLog.size(remembered)) "
-                              + "accepted=\(SnapLog.size(actual.size))")
-        }
-
-        let corrected = SnapGroupSupport.reanchoredFrame(action: member.action,
-                                                         zone: member.frame,
-                                                         acceptedSize: actual.size)
-        guard abs(corrected.minX - actual.minX) > SnapGroupSupport.clampTolerance
-                || abs(corrected.minY - actual.minY) > SnapGroupSupport.clampTolerance
-        else { return actual }
-        SnapLog.event("link.reanchor",
-                      "windowID=\(member.windowID) action=\(member.action) "
-                          + "was=\(SnapLog.rect(actual)) -> \(SnapLog.rect(corrected))")
-        return write(corrected, to: member.windowID) ?? actual
+        latestRequest[member.windowID] = (anchored.size, preWriteSize, requestCounter)
+        return write(anchored, to: member.windowID)
     }
 
     private func isSelfWriteEcho(windowID: CGWindowID, liveFrame: CGRect) -> Bool {
@@ -838,6 +822,15 @@ final class SnapGroupStore {
     /// invisible inside a seam drag.
     private static let clampSettleDelay: TimeInterval = 0.05
 
+    /// The settle pass: the only place a read-back is believed.
+    ///
+    /// Three gates, in order, and each one exists because skipping it produced
+    /// a real defect. The read must belong to the newest request for that
+    /// window (or a drag confirms a minimum at whatever width it was passing
+    /// through); the write must actually have landed (or the new origin with
+    /// the old size reads as both a clamp and an anchor violation); and only
+    /// then may the frame be judged — first against the size that was asked
+    /// for, then against the screen edges its zone is anchored to.
     private func confirmClamps(pending: [CGWindowID: Int],
                                resizedWindowID: CGWindowID,
                                oldFrame: CGRect,
@@ -854,35 +847,64 @@ final class SnapGroupStore {
             else { continue }
             live[windowID] = settled
             observe(settled, for: windowID)
-            guard SnapGroupSupport.confirmsMinimum(settledSize: settled.size,
-                                                   latestRequestedSize: latest.size,
-                                                   settledGeneration: scheduledGeneration,
-                                                   latestGeneration: latest.generation)
-            else {
-                if scheduledGeneration != latest.generation {
-                    SnapLog.event("link.clamp-stale",
-                                  "windowID=\(windowID) read-for=\(scheduledGeneration) "
-                                      + "latest=\(latest.generation) settled=\(SnapLog.size(settled.size)) "
-                                      + "reason=a-newer-request-was-already-out")
-                }
+
+            guard scheduledGeneration == latest.generation else {
+                SnapLog.event("link.settle-stale",
+                              "windowID=\(windowID) read-for=\(scheduledGeneration) "
+                                  + "latest=\(latest.generation) reason=a-newer-request-was-already-out")
                 continue
             }
-            // Confirmed against the latest request only now: an app's minimum
-            // is remembered so the next step of the same drag clamps up front
-            // instead of rediscovering it on every notification. It is dropped
-            // again the moment a later write is accepted smaller
-            // (`writeMember`).
-            clamped[windowID] = settled.size
-            acceptedMinimums[windowID] = settled.size
-            let reanchored = SnapGroupSupport.reanchoredFrame(action: member.action,
-                                                              zone: member.frame,
-                                                              acceptedSize: settled.size)
-            SnapLog.event("link.clamped",
-                          "windowID=\(windowID) action=\(member.action) "
-                              + "requested=\(SnapLog.size(latest.size)) settled=\(SnapLog.rect(settled)) "
-                              + "reanchored=\(SnapLog.rect(reanchored))")
-            guard reanchored != settled else { continue }
-            live[windowID] = writeMember(reanchored, member: member) ?? reanchored
+            guard SnapGroupSupport.writeLanded(preWriteSize: latest.preWriteSize,
+                                               requestedSize: latest.size,
+                                               accepted: settled.size)
+            else {
+                SnapLog.event("link.not-landed",
+                              "windowID=\(windowID) requested=\(SnapLog.size(latest.size)) "
+                                  + "settled=\(SnapLog.rect(settled)) "
+                                  + "preWrite=\(SnapLog.size(latest.preWriteSize))")
+                continue
+            }
+
+            // A size the app accepted that is under the floor we thought it
+            // had disproves that floor — checked here, not at write time, for
+            // the same reason as everything else in this loop.
+            if let remembered = acceptedMinimums[windowID],
+               SnapGroupSupport.disprovesMinimum(remembered: remembered, accepted: settled.size) {
+                acceptedMinimums.removeValue(forKey: windowID)
+                SnapLog.event("link.minimum-dropped",
+                              "windowID=\(windowID) remembered=\(SnapLog.size(remembered)) "
+                                  + "accepted=\(SnapLog.size(settled.size))")
+            }
+
+            let isClamp = SnapGroupSupport.confirmsMinimum(settledSize: settled.size,
+                                                           latestRequestedSize: latest.size,
+                                                           settledGeneration: scheduledGeneration,
+                                                           latestGeneration: latest.generation)
+            if isClamp {
+                clamped[windowID] = settled.size
+                acceptedMinimums[windowID] = settled.size
+            }
+
+            // Whatever size the window ended up at, it belongs flush against
+            // the screen edges its zone is anchored to. A wrong width is
+            // survivable; a gap at the screen edge is not.
+            let corrected = SnapGroupSupport.reanchoredFrame(action: member.action,
+                                                             zone: member.frame,
+                                                             acceptedSize: settled.size)
+            let offAnchor = abs(corrected.minX - settled.minX) > SnapGroupSupport.clampTolerance
+                || abs(corrected.minY - settled.minY) > SnapGroupSupport.clampTolerance
+            if isClamp {
+                SnapLog.event("link.clamped",
+                              "windowID=\(windowID) action=\(member.action) "
+                                  + "requested=\(SnapLog.size(latest.size)) settled=\(SnapLog.rect(settled)) "
+                                  + "reanchored=\(SnapLog.rect(corrected))")
+            } else if offAnchor {
+                SnapLog.event("link.reanchor",
+                              "windowID=\(windowID) action=\(member.action) "
+                                  + "settled=\(SnapLog.rect(settled)) -> \(SnapLog.rect(corrected))")
+            }
+            guard isClamp || offAnchor, corrected != settled else { continue }
+            live[windowID] = writeMember(corrected, member: member) ?? corrected
         }
         guard !clamped.isEmpty else { return }
 

@@ -169,9 +169,19 @@ enum SnapAX {
     }
 
     /// Writes `rect` (AppKit space) and reads back what was actually
-    /// accepted — the only way to discover an app-enforced minimum size,
-    /// which Accessibility exposes no way to query up front. `nil` means the
-    /// read-back did not land, so nothing is known about what landed either:
+    /// accepted.
+    ///
+    /// Size first, then position, and the position is the one derived from the
+    /// requested size — a window anchored to a far screen edge (a right half,
+    /// a bottom quarter) is then never asked for an origin that belongs to a
+    /// different width. The two attributes still land independently and
+    /// asynchronously, so the returned frame may show one and not the other:
+    /// callers must check `SnapGroupSupport.writeLanded` before concluding
+    /// anything from it, never the immediate read-back alone.
+    ///
+    /// Reading back is also the only way to discover an app-enforced minimum
+    /// size, which Accessibility exposes no way to query up front. `nil` means
+    /// the read itself failed, so nothing is known about what landed either:
     /// callers treat that as "unreachable this pass", never as success.
     @discardableResult
     static func setFrame(_ rect: CGRect, on element: AXUIElement) -> CGRect? {

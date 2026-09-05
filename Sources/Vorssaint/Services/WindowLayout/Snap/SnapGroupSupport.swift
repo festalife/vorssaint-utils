@@ -402,6 +402,35 @@ enum SnapGroupSupport {
         accepted.width > requested.width + tolerance || accepted.height > requested.height + tolerance
     }
 
+    /// Whether a read-back describes the write it followed, or a window that
+    /// has not applied it yet.
+    ///
+    /// Accessibility applies position and size independently and
+    /// asynchronously, so a read taken too early routinely shows one of them
+    /// and not the other. A real capture: a right half being *grown* leftward
+    /// from (756,0 756x949) to (729,0 783x949) read back as (729,0 756x949) —
+    /// the new origin with the old size. Every conclusion drawn from that
+    /// frame is wrong: its right edge is 27pt short of the screen, so an
+    /// anchor check "corrects" the window straight back to its zone and undoes
+    /// the growth, which is what made every shrink of the neighbour's
+    /// counterpart snap back one step at a time.
+    ///
+    /// A read whose size still equals the size before the write has not
+    /// landed, and nothing may be decided from it. A write that asked for the
+    /// size the window already had has nothing to land and is trivially fine.
+    static func writeLanded(preWriteSize: CGSize?,
+                            requestedSize: CGSize,
+                            accepted: CGSize,
+                            tolerance: CGFloat = clampTolerance) -> Bool {
+        guard let preWriteSize else { return true }
+        let requestedAChange = abs(requestedSize.width - preWriteSize.width) > tolerance
+            || abs(requestedSize.height - preWriteSize.height) > tolerance
+        guard requestedAChange else { return true }
+        let unchanged = abs(accepted.width - preWriteSize.width) <= tolerance
+            && abs(accepted.height - preWriteSize.height) <= tolerance
+        return !unchanged
+    }
+
     /// Whether a settle read may confirm an app-enforced minimum.
     ///
     /// Two conditions, and the second is the one a real capture found missing.
