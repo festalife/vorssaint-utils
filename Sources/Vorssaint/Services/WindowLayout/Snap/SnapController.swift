@@ -764,7 +764,8 @@ final class SnapController {
             panel.alphaValue = 0
             panel.orderFrontRegardless()
         }
-        SnapLog.event("preview.show", "action=\(action) rect=\(SnapLog.rect(frame))")
+        SnapLog.event("preview.show",
+                      "action=\(action) rect=\(SnapLog.rect(frame)) level=\(panel.level.rawValue)")
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.09
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -820,7 +821,9 @@ final class SnapController {
         let wasVisible = panel.isVisible
         panel.show(visibleFrame: screen.visibleFrame, presets: presets)
         guard !wasVisible else { return }
-        SnapLog.event("layouts.show", "trigger=top-edge presets=\(presets.count) screen=\(SnapLog.rect(screen.visibleFrame))")
+        SnapLog.event("layouts.show",
+                      "trigger=top-edge presets=\(presets.count) screen=\(SnapLog.rect(screen.visibleFrame)) "
+                          + "level=\(panel.windowLevel)")
         transition(.layoutsPanelChanged(true))
     }
 
@@ -915,7 +918,8 @@ final class SnapController {
         zoomHoverPanelOpen = true
         zoomHoverPresets = presets
         SnapLog.event("layouts.show",
-                      "trigger=zoom-button windowID=\(button.windowID) presets=\(presets.count) button=\(SnapLog.rect(button.frame))")
+                      "trigger=zoom-button windowID=\(button.windowID) presets=\(presets.count) "
+                          + "button=\(SnapLog.rect(button.frame)) level=\(panel.windowLevel)")
     }
 
     private func cancelZoomHover() {
@@ -973,7 +977,9 @@ final class SnapController {
         if panel.frame != hint.frame { panel.setFrame(hint.frame, display: true) }
         if !panel.isVisible {
             panel.orderFrontRegardless()
-            SnapLog.event("divider.show", "rect=\(SnapLog.rect(hint.frame)) vertical=\(hint.isVertical)")
+            SnapLog.event("divider.show",
+                          "rect=\(SnapLog.rect(hint.frame)) vertical=\(hint.isVertical) "
+                              + "level=\(panel.level.rawValue)")
         }
         dividerHintVisible = true
     }

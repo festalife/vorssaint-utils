@@ -188,12 +188,27 @@ final class SnapAssistPanel {
         panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        // Again, after activation: `NSApp.activate` reorders this app's
+        // windows against everyone else's, and the ordering that survives that
+        // is the one a person actually sees. Called on every `show`, so
+        // advancing to the next free cell re-raises the panel too rather than
+        // trusting it to have stayed on top for the whole session.
+        panel.orderFrontRegardless()
+        SnapLog.event("assist.overlay-level",
+                      "level=\(panel.level.rawValue) visible=\(panel.isVisible) key=\(panel.isKeyWindow) "
+                          + "alpha=\(String(format: "%.2f", panel.alphaValue)) advanced=\(wasVisible)")
         shownAt = ProcessInfo.processInfo.systemUptime
         if !wasVisible {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().alphaValue = 1
+            } completionHandler: { [weak panel] in
+                // Belt and braces: an overlay that is ordered correctly but
+                // still fully transparent is indistinguishable, from the
+                // person's side, from one that never appeared.
+                guard let panel, panel.isVisible else { return }
+                panel.alphaValue = 1
             }
         }
         installMonitors(for: panel)
@@ -279,12 +294,25 @@ final class SnapAssistPanel {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.level = .statusBar
+        // Above every ordinary application window, unconditionally. A real
+        // user report had the overlay open and logged over a right half that
+        // happened to be covered by three other apps' windows, and never saw
+        // it: it was ordered into the window list correctly but sat behind
+        // them. Snap Assist covers the space it is offering, so anything that
+        // can end up in front of it defeats the whole feature.
+        // `.popUpMenu` rather than `.statusBar`, which the preview, the Snap
+        // Layouts bar and the divider hint use: those only ever draw, while
+        // this one has to be clickable, so it must be the topmost of the four
+        // as well as above every app.
+        panel.level = .popUpMenu
         panel.acceptsMouseMovedEvents = true
         // Explicit, not just the AppKit default: a click on any card must
         // never pass through to whatever sits behind the panel.
         panel.ignoresMouseEvents = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        // No `.ignoresCycle`: it says nothing about ordering and, on a panel
+        // that genuinely takes key status, only muddies what the window
+        // server is being told about a window that is meant to be in front.
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.animationBehavior = .none
         self.panel = panel
         return panel

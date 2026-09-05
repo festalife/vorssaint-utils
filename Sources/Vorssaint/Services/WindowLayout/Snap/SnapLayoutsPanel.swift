@@ -22,6 +22,11 @@ final class SnapLayoutsPanel {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    /// The window level the bar is actually at, for the log — this panel and
+    /// the Snap Assist overlay have to stay above every ordinary application
+    /// window, and a transcript should say so rather than leave it assumed.
+    var windowLevel: Int { panel?.level.rawValue ?? 0 }
+
     /// The panel's current on-screen frame, or nil before it has ever been
     /// shown. `WindowLayoutService` uses this to decide whether the pointer
     /// is still reachable from an open panel.
@@ -45,7 +50,12 @@ final class SnapLayoutsPanel {
         if panel.frame != frame {
             panel.setFrame(frame, display: true)
         }
-        guard !panel.isVisible else { return }
+        guard !panel.isVisible else {
+            // Already up: re-raise anyway, since anything shown since may have
+            // been ordered in front of it.
+            panel.orderFrontRegardless()
+            return
+        }
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
@@ -71,7 +81,10 @@ final class SnapLayoutsPanel {
         if panel.frame != frame {
             panel.setFrame(frame, display: true)
         }
-        guard !panel.isVisible else { return }
+        guard !panel.isVisible else {
+            panel.orderFrontRegardless()
+            return
+        }
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
