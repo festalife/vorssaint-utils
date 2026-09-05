@@ -402,6 +402,41 @@ enum SnapGroupSupport {
         accepted.width > requested.width + tolerance || accepted.height > requested.height + tolerance
     }
 
+    /// Whether a settle read may confirm an app-enforced minimum.
+    ///
+    /// Two conditions, and the second is the one a real capture found missing.
+    /// A confirmation is scheduled per write, but a seam drag issues writes
+    /// faster than they settle, so a read taken for one request routinely
+    /// arrives after two or three newer ones have gone out. Compared against
+    /// the request it was *scheduled* for, such a read looks larger than asked
+    /// — the drag has moved on since — and a minimum gets "confirmed" at
+    /// whatever intermediate width the drag happened to be passing through.
+    /// That is exactly what froze a right half at 841pt and left a 61pt gap at
+    /// the screen edge for the rest of the session.
+    ///
+    /// So: the read has to belong to the most recent request for that window
+    /// (`settledGeneration == latestGeneration`), and it is judged against
+    /// that same latest request, never the one the timer was scheduled for.
+    static func confirmsMinimum(settledSize: CGSize,
+                                latestRequestedSize: CGSize,
+                                settledGeneration: Int,
+                                latestGeneration: Int,
+                                tolerance: CGFloat = clampTolerance) -> Bool {
+        guard settledGeneration == latestGeneration else { return false }
+        return isMinimumSizeClamp(requested: latestRequestedSize, accepted: settledSize, tolerance: tolerance)
+    }
+
+    /// Whether a size accepted for a window disproves a minimum remembered for
+    /// it — the app took something smaller than the floor we thought it had,
+    /// so that floor was never real (or is no longer). A remembered minimum
+    /// that is never re-validated is worse than none: it keeps clamping every
+    /// later computation for the rest of the session.
+    static func disprovesMinimum(remembered: CGSize,
+                                 accepted: CGSize,
+                                 tolerance: CGFloat = clampTolerance) -> Bool {
+        accepted.width < remembered.width - tolerance || accepted.height < remembered.height - tolerance
+    }
+
     /// `free` with every edge `action` anchors to a *screen* edge forced back
     /// to `theoreticalZone`'s own value.
     ///

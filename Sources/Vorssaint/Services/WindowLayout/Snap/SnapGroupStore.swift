@@ -64,6 +64,14 @@ final class SnapGroupStore {
     /// Cleared when the member is placed again or leaves the group.
     private var acceptedMinimums: [CGWindowID: CGSize] = [:]
 
+    /// The most recent frame requested for each member, and a counter bumped
+    /// on every request. A seam drag issues writes faster than they settle, so
+    /// a confirmation read routinely arrives after newer requests have gone
+    /// out; without these it would be judged against a request the drag had
+    /// already moved past. See `SnapGroupSupport.confirmsMinimum`.
+    private var latestRequest: [CGWindowID: (size: CGSize, generation: Int)] = [:]
+    private var requestCounter = 0
+
     /// Frames this store wrote itself, and when. The AX notification a write
     /// provokes must not be mistaken for a fresh user drag — correlated by
     /// *frame*, not by a time window, so a genuine resize starting moments
@@ -137,7 +145,10 @@ final class SnapGroupStore {
         // The frame that was actually written is the member's first live
         // frame: where it is, as opposed to which cell it holds.
         observe(appliedRect, for: windowID)
+        // A fresh placement invalidates everything learned about this window
+        // from the resize drags that came before it.
         acceptedMinimums.removeValue(forKey: windowID)
+        latestRequest.removeValue(forKey: windowID)
         SnapLog.event("group.join",
                       "windowID=\(windowID) action=\(action) screen=\(screen.displayID) "
                           + "zone=\(SnapLog.rect(zone)) placed=\(SnapLog.rect(appliedRect)) "
@@ -170,6 +181,7 @@ final class SnapGroupStore {
         groups.removeAll()
         lastLiveFrames.removeAll()
         acceptedMinimums.removeAll()
+        latestRequest.removeAll()
         selfWrites.removeAll()
         framesCache.removeAll()
         syncWatcher(enabled: watcherEnabled)
@@ -188,6 +200,7 @@ final class SnapGroupStore {
         guard touched else { return }
         lastLiveFrames.removeValue(forKey: windowID)
         acceptedMinimums.removeValue(forKey: windowID)
+        latestRequest.removeValue(forKey: windowID)
         SnapLog.event("group.leave", "windowID=\(windowID) reason=\(reason)")
         syncWatcher(enabled: watcherEnabled)
     }
@@ -577,6 +590,47 @@ final class SnapGroupStore {
         return actual
     }
 
+    /// Writes a frame for a group member, keeping it flush with every screen
+    /// edge its zone is anchored to — both in what is asked for (the origin is
+    /// derived from the size, so a right-anchored member can never be *asked*
+    /// for a frame that leaves a gap at the screen edge) and in what comes
+    /// back (a result off its anchors is corrected straight away).
+    ///
+    /// This is the backstop that makes a wrong minimum survivable: even if
+    /// something else decides a member cannot be narrower than it really is,
+    /// the member still ends flush with its own screen edge rather than
+    /// drifting inward and leaving a gap.
+    @discardableResult
+    private func writeMember(_ rect: CGRect, member: SnapGroupMember) -> CGRect? {
+        let anchored = SnapGroupSupport.reanchoredFrame(action: member.action,
+                                                        zone: member.frame,
+                                                        acceptedSize: rect.size)
+        requestCounter += 1
+        latestRequest[member.windowID] = (anchored.size, requestCounter)
+        guard let actual = write(anchored, to: member.windowID) else { return nil }
+
+        // A size the app accepted that is smaller than the floor we thought it
+        // had disproves that floor — it was never real, or is no longer.
+        if let remembered = acceptedMinimums[member.windowID],
+           SnapGroupSupport.disprovesMinimum(remembered: remembered, accepted: actual.size) {
+            acceptedMinimums.removeValue(forKey: member.windowID)
+            SnapLog.event("link.minimum-dropped",
+                          "windowID=\(member.windowID) remembered=\(SnapLog.size(remembered)) "
+                              + "accepted=\(SnapLog.size(actual.size))")
+        }
+
+        let corrected = SnapGroupSupport.reanchoredFrame(action: member.action,
+                                                         zone: member.frame,
+                                                         acceptedSize: actual.size)
+        guard abs(corrected.minX - actual.minX) > SnapGroupSupport.clampTolerance
+                || abs(corrected.minY - actual.minY) > SnapGroupSupport.clampTolerance
+        else { return actual }
+        SnapLog.event("link.reanchor",
+                      "windowID=\(member.windowID) action=\(member.action) "
+                          + "was=\(SnapLog.rect(actual)) -> \(SnapLog.rect(corrected))")
+        return write(corrected, to: member.windowID) ?? actual
+    }
+
     private func isSelfWriteEcho(windowID: CGWindowID, liveFrame: CGRect) -> Bool {
         guard let marked = selfWrites[windowID],
               ProcessInfo.processInfo.systemUptime - marked.at < selfWriteExpiry
@@ -597,6 +651,7 @@ final class SnapGroupStore {
         let members = Set(groups.values.flatMap { $0.members.map(\.windowID) })
         lastLiveFrames = lastLiveFrames.filter { members.contains($0.key) }
         acceptedMinimums = acceptedMinimums.filter { members.contains($0.key) }
+        latestRequest = latestRequest.filter { members.contains($0.key) }
         watcher.watch(enabled ? members : [])
     }
 
@@ -606,6 +661,7 @@ final class SnapGroupStore {
         selfWrites.removeAll()
         lastLiveFrames.removeAll()
         acceptedMinimums.removeAll()
+        latestRequest.removeAll()
         framesCache.removeAll()
     }
 
@@ -751,18 +807,24 @@ final class SnapGroupStore {
                        group: SnapGroup,
                        theoreticalZones: [CGWindowID: CGRect]) {
         let deadline = ProcessInfo.processInfo.systemUptime + Self.linkedResizeBudget
-        var requested: [CGWindowID: CGRect] = [:]
+        var pending: [CGWindowID: Int] = [:]
         for adjustment in adjustments {
             guard ProcessInfo.processInfo.systemUptime < deadline else {
                 SnapLog.event("link.budget", "stopped early, remaining members retry on the next notification")
                 break
             }
-            write(adjustment.frame, to: adjustment.windowID)
-            if adjustment.windowID != resizedWindowID { requested[adjustment.windowID] = adjustment.frame }
+            guard let member = group.members.first(where: { $0.windowID == adjustment.windowID }) else {
+                write(adjustment.frame, to: adjustment.windowID)
+                continue
+            }
+            writeMember(adjustment.frame, member: member)
+            if adjustment.windowID != resizedWindowID {
+                pending[adjustment.windowID] = latestRequest[adjustment.windowID]?.generation ?? 0
+            }
         }
-        guard !requested.isEmpty else { return }
+        guard !pending.isEmpty else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.clampSettleDelay) { [weak self] in
-            self?.confirmClamps(requested: requested,
+            self?.confirmClamps(pending: pending,
                                 resizedWindowID: resizedWindowID,
                                 oldFrame: oldFrame,
                                 newFrame: newFrame,
@@ -776,7 +838,7 @@ final class SnapGroupStore {
     /// invisible inside a seam drag.
     private static let clampSettleDelay: TimeInterval = 0.05
 
-    private func confirmClamps(requested: [CGWindowID: CGRect],
+    private func confirmClamps(pending: [CGWindowID: Int],
                                resizedWindowID: CGWindowID,
                                oldFrame: CGRect,
                                newFrame: CGRect,
@@ -784,34 +846,43 @@ final class SnapGroupStore {
                                theoreticalZones: [CGWindowID: CGRect]) {
         var clamped: [CGWindowID: CGSize] = [:]
         var live: [CGWindowID: CGRect] = [:]
-        for (windowID, requestedFrame) in requested {
+        for (windowID, scheduledGeneration) in pending {
             guard let member = group.members.first(where: { $0.windowID == windowID }),
                   let element = watcher.element(for: windowID),
-                  let settled = SnapAX.frame(of: element)
+                  let settled = SnapAX.frame(of: element),
+                  let latest = latestRequest[windowID]
             else { continue }
             live[windowID] = settled
             observe(settled, for: windowID)
-            guard SnapGroupSupport.isMinimumSizeClamp(requested: requestedFrame.size,
-                                                      accepted: settled.size)
-            else { continue }
-            // Confirmed only now: an app's minimum is remembered so the next
-            // step of the same drag clamps up front instead of rediscovering
-            // it and rewriting the neighbour on every notification.
+            guard SnapGroupSupport.confirmsMinimum(settledSize: settled.size,
+                                                   latestRequestedSize: latest.size,
+                                                   settledGeneration: scheduledGeneration,
+                                                   latestGeneration: latest.generation)
+            else {
+                if scheduledGeneration != latest.generation {
+                    SnapLog.event("link.clamp-stale",
+                                  "windowID=\(windowID) read-for=\(scheduledGeneration) "
+                                      + "latest=\(latest.generation) settled=\(SnapLog.size(settled.size)) "
+                                      + "reason=a-newer-request-was-already-out")
+                }
+                continue
+            }
+            // Confirmed against the latest request only now: an app's minimum
+            // is remembered so the next step of the same drag clamps up front
+            // instead of rediscovering it on every notification. It is dropped
+            // again the moment a later write is accepted smaller
+            // (`writeMember`).
             clamped[windowID] = settled.size
             acceptedMinimums[windowID] = settled.size
-            // Re-anchor: an app that refuses a size generally keeps the origin
-            // it was given, which leaves the member hanging off the screen edge
-            // its zone is anchored to. Only the anchored edges are moved; the
-            // shared edge keeps the size the app accepted.
             let reanchored = SnapGroupSupport.reanchoredFrame(action: member.action,
                                                               zone: member.frame,
                                                               acceptedSize: settled.size)
             SnapLog.event("link.clamped",
                           "windowID=\(windowID) action=\(member.action) "
-                              + "requested=\(SnapLog.rect(requestedFrame)) settled=\(SnapLog.rect(settled)) "
+                              + "requested=\(SnapLog.size(latest.size)) settled=\(SnapLog.rect(settled)) "
                               + "reanchored=\(SnapLog.rect(reanchored))")
             guard reanchored != settled else { continue }
-            live[windowID] = write(reanchored, to: windowID) ?? reanchored
+            live[windowID] = writeMember(reanchored, member: member) ?? reanchored
         }
         guard !clamped.isEmpty else { return }
 
@@ -832,7 +903,11 @@ final class SnapGroupStore {
             SnapLog.event("link.pushback",
                           "windowID=\(resizedWindowID) to=\(SnapLog.rect(adjustment.frame)) "
                               + "reason=neighbour-at-its-minimum")
-            write(adjustment.frame, to: resizedWindowID)
+            if let member = group.members.first(where: { $0.windowID == resizedWindowID }) {
+                writeMember(adjustment.frame, member: member)
+            } else {
+                write(adjustment.frame, to: resizedWindowID)
+            }
         }
     }
 

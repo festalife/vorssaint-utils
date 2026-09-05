@@ -7281,6 +7281,50 @@ struct MetricsTests {
                                                    accepted: CGSize(width: 756, height: 480)),
                "a minimum on the other axis counts just the same")
 
+        // MARK: A minimum is confirmed only against the latest request
+
+        // The captured sequence. One seam drag issues writes faster than they
+        // settle: 902, then 870, then 841, then 810 for the same right half.
+        // The read taken for the 841 request lands after 810 has gone out —
+        // and 841 is larger than 810, so judged against the wrong request it
+        // "confirms" a minimum of 841. That is what froze the window at 841pt
+        // and left a 61pt gap at the screen edge for the rest of the session.
+        let cmHeight: CGFloat = 949
+        func cmSize(_ width: CGFloat) -> CGSize { CGSize(width: width, height: cmHeight) }
+
+        expect(!SnapGroupSupport.confirmsMinimum(settledSize: cmSize(841),
+                                                 latestRequestedSize: cmSize(810),
+                                                 settledGeneration: 3, latestGeneration: 4),
+               "a read taken for an earlier request never confirms, however large it looks")
+        expect(!SnapGroupSupport.confirmsMinimum(settledSize: cmSize(841),
+                                                 latestRequestedSize: cmSize(841),
+                                                 settledGeneration: 3, latestGeneration: 3),
+               "the current request being met exactly is the app obliging")
+        expect(!SnapGroupSupport.confirmsMinimum(settledSize: cmSize(841),
+                                                 latestRequestedSize: cmSize(902),
+                                                 settledGeneration: 1, latestGeneration: 1),
+               "a read smaller than the request is a write that has not landed")
+        expect(SnapGroupSupport.confirmsMinimum(settledSize: cmSize(841),
+                                                latestRequestedSize: cmSize(400),
+                                                settledGeneration: 4, latestGeneration: 4),
+               "only the newest request coming back wider than asked is a real minimum")
+
+        // And a remembered minimum has to be given up again the moment the app
+        // accepts something smaller, or it clamps every later computation.
+        expect(SnapGroupSupport.disprovesMinimum(remembered: cmSize(841), accepted: cmSize(602)),
+               "an accepted size below the remembered floor proves that floor was never real")
+        expect(!SnapGroupSupport.disprovesMinimum(remembered: cmSize(841), accepted: cmSize(841)),
+               "sitting exactly at the floor does not disprove it")
+        expect(!SnapGroupSupport.disprovesMinimum(remembered: cmSize(841), accepted: cmSize(840)),
+               "nor does a point of rounding under it")
+
+        // Whatever any of that decides, a right-anchored member is always
+        // written flush with its screen edge: the origin comes from the size.
+        let cmRightZone = CGRect(x: 756, y: 0, width: 756, height: cmHeight)
+        expect(SnapGroupSupport.reanchoredFrame(action: .rightHalf, zone: cmRightZone,
+                                                acceptedSize: cmSize(841)).maxX == 1512,
+               "a frozen width still ends flush with the right screen edge, never 61pt short of it")
+
         // MARK: Linked resize against an app's own minimum size
 
         // A 1512x949 screen, halves, no gap. B (rightHalf, zone x=756) has an
