@@ -364,6 +364,48 @@ enum SnapGroupSupport {
         return result
     }
 
+    /// Where a member has to sit when its app refuses to shrink to the size a
+    /// linked resize asked for (spec §6, "the divider stops at the minimum").
+    ///
+    /// Accessibility cannot be asked a window's minimum size, so the only way
+    /// to find it is to write a smaller frame and read back what was accepted
+    /// — and an app that clamps the *size* generally keeps the *origin* it was
+    /// given, which leaves the member wider than requested and sticking out
+    /// past the screen edge its zone was anchored to. On screen that reads as
+    /// a snapped window drifting away from the edge toward the centre partway
+    /// through a seam drag, which is what a real capture found.
+    ///
+    /// The answer is not to guess: a member's anchored edges are a fixed
+    /// property of the zone it was placed into (`anchoredEdges`), so the
+    /// accepted size is simply put back flush against them. A right-anchored
+    /// member keeps its right edge on the screen edge and grows leftward; a
+    /// left-anchored one keeps its left edge and grows rightward. An axis the
+    /// zone anchors on neither side (a center third's horizontal axis) keeps
+    /// the zone's own near edge, since there is no screen edge to be flush
+    /// with.
+    static func reanchoredFrame(action: WindowLayoutAction,
+                                zone: CGRect,
+                                acceptedSize: CGSize) -> CGRect {
+        let edges = anchoredEdges(for: action)
+        let x: CGFloat
+        if edges.contains(.minX) {
+            x = zone.minX
+        } else if edges.contains(.maxX) {
+            x = zone.maxX - acceptedSize.width
+        } else {
+            x = zone.minX
+        }
+        let y: CGFloat
+        if edges.contains(.minY) {
+            y = zone.minY
+        } else if edges.contains(.maxY) {
+            y = zone.maxY - acceptedSize.height
+        } else {
+            y = zone.minY
+        }
+        return CGRect(origin: CGPoint(x: x, y: y), size: acceptedSize)
+    }
+
     /// Spec §8: a resolution change or a display reconnecting recalculates
     /// every member's zone "in proportion" and re-places the group. Every
     /// `WindowLayoutAction` a member can join a group with is already

@@ -7257,6 +7257,66 @@ struct MetricsTests {
         expect(smReset.apply(.reset(reason: "Accessibility revoked")).to == .idle,
                "a reset returns to idle from any phase")
 
+        // MARK: Linked resize against an app's own minimum size
+
+        // A 1512x949 screen, halves, no gap. B (rightHalf, zone x=756) has an
+        // app-enforced minimum width of 400. The user drags A's right edge
+        // rightward far enough that B would have to shrink to 140.
+        let lrScreenWidth: CGFloat = 1512
+        let lrHeight: CGFloat = 949
+        let lrLeftZone = CGRect(x: 0, y: 0, width: 756, height: lrHeight)
+        let lrRightZone = CGRect(x: 756, y: 0, width: 756, height: lrHeight)
+        let lrMinimum = CGSize(width: 400, height: lrHeight)
+
+        // An app that clamps the size it was given keeps the origin, so the
+        // read-back is 400 wide starting where 140 would have started — off
+        // the screen's right edge, which is the drift Marco saw.
+        let lrClampedInPlace = CGRect(x: 1372, y: 0, width: 400, height: lrHeight)
+        expect(lrClampedInPlace.maxX > lrScreenWidth,
+               "the clamped read-back really does stick out past the screen edge")
+        let lrReanchored = SnapGroupSupport.reanchoredFrame(action: .rightHalf,
+                                                            zone: lrRightZone,
+                                                            acceptedSize: lrMinimum)
+        expect(lrReanchored == CGRect(x: 1112, y: 0, width: 400, height: lrHeight),
+               "a right-anchored neighbour keeps its right edge on the screen edge and grows leftward")
+        expect(lrReanchored.maxX == lrScreenWidth, "so it ends flush with the screen edge, not past it")
+        expect(SnapGroupSupport.reanchoredFrame(action: .leftHalf, zone: lrLeftZone,
+                                                acceptedSize: CGSize(width: 400, height: lrHeight))
+               == CGRect(x: 0, y: 0, width: 400, height: lrHeight),
+               "a left-anchored neighbour keeps its left edge instead")
+        expect(SnapGroupSupport.reanchoredFrame(action: .bottomRight, zone: CGRect(x: 756, y: 0,
+                                                                                   width: 756, height: 474),
+                                                acceptedSize: CGSize(width: 400, height: 300))
+               == CGRect(x: 1112, y: 0, width: 400, height: 300),
+               "a corner is re-anchored on both of its axes at once")
+        expect(SnapGroupSupport.reanchoredFrame(action: .centerThird, zone: CGRect(x: 504, y: 0,
+                                                                                   width: 504, height: lrHeight),
+                                                acceptedSize: CGSize(width: 400, height: lrHeight))
+               == CGRect(x: 504, y: 0, width: 400, height: lrHeight),
+               "an axis anchored on neither side keeps its zone's own near edge")
+
+        // With the neighbour back on its edge, the resized window is pulled
+        // back so the two are flush: A ends 1112 wide, not 1372.
+        let lrGroup = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 1, action: .leftHalf, frame: lrLeftZone),
+            SnapGroupMember(windowID: 2, action: .rightHalf, frame: lrRightZone),
+        ])
+        let lrZones: [CGWindowID: CGRect] = [1: lrLeftZone, 2: lrRightZone]
+        let lrPushback = SnapLinkedResizeSupport.adjustments(
+            resizedWindowID: 1,
+            oldFrame: lrLeftZone,
+            newFrame: CGRect(x: 0, y: 0, width: 1372, height: lrHeight),
+            group: lrGroup,
+            theoreticalZones: lrZones,
+            gap: 0,
+            currentFrames: [1: CGRect(x: 0, y: 0, width: 1372, height: lrHeight), 2: lrReanchored],
+            minimumSize: { $0 == 2 ? lrMinimum : CGSize(width: 80, height: 80) })
+        expect(lrPushback.contains(where: { $0.windowID == 1
+                                            && $0.frame == CGRect(x: 0, y: 0, width: 1112, height: lrHeight) }),
+               "the resized window is pulled back to meet the neighbour's minimum, leaving one seam")
+        expect(!lrPushback.contains(where: { $0.windowID == 2 }),
+               "and the neighbour, already at its minimum on its own edge, is not written again")
+
         // MARK: Snap Assist cell occupancy
 
         // Only a Snap Group member takes a cell out of the offer. The bug this

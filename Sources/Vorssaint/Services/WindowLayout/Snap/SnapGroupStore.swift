@@ -48,6 +48,15 @@ final class SnapGroupStore {
     /// diverged — see `SnapMemberMotion` for the capture that found it.
     private var lastLiveFrames: [CGWindowID: CGRect] = [:]
 
+    /// The smallest size each member's app has actually been observed to
+    /// accept. Accessibility cannot be asked for this, so it is only ever
+    /// learned by writing something smaller and reading back what came out.
+    /// Remembered so the *next* step of the same seam drag clamps up front
+    /// instead of rediscovering the floor — which is what made a clamped
+    /// neighbour get rewritten, and re-anchored, on every notification.
+    /// Cleared when the member is placed again or leaves the group.
+    private var acceptedMinimums: [CGWindowID: CGSize] = [:]
+
     /// Frames this store wrote itself, and when. The AX notification a write
     /// provokes must not be mistaken for a fresh user drag — correlated by
     /// *frame*, not by a time window, so a genuine resize starting moments
@@ -115,6 +124,7 @@ final class SnapGroupStore {
         // A placement resets the motion reference: the window is now exactly
         // where it was put, zone and live frame agreeing again.
         lastLiveFrames[windowID] = appliedRect
+        acceptedMinimums.removeValue(forKey: windowID)
         SnapLog.event("group.join",
                       "windowID=\(windowID) action=\(action) screen=\(screen.displayID) "
                           + "rect=\(SnapLog.rect(appliedRect)) members=\(updated.members.count) "
@@ -134,6 +144,7 @@ final class SnapGroupStore {
         }
         guard touched else { return }
         lastLiveFrames.removeValue(forKey: windowID)
+        acceptedMinimums.removeValue(forKey: windowID)
         SnapLog.event("group.leave", "windowID=\(windowID) reason=\(reason)")
         syncWatcher(enabled: watcherEnabled)
     }
@@ -492,6 +503,7 @@ final class SnapGroupStore {
         watcherEnabled = enabled
         let members = Set(groups.values.flatMap { $0.members.map(\.windowID) })
         lastLiveFrames = lastLiveFrames.filter { members.contains($0.key) }
+        acceptedMinimums = acceptedMinimums.filter { members.contains($0.key) }
         watcher.watch(enabled ? members : [])
     }
 
@@ -500,6 +512,7 @@ final class SnapGroupStore {
         watcher.stopAll()
         selfWrites.removeAll()
         lastLiveFrames.removeAll()
+        acceptedMinimums.removeAll()
         framesCache.removeAll()
     }
 
@@ -589,7 +602,7 @@ final class SnapGroupStore {
             theoreticalZones: zones,
             gap: WindowLayoutGaps.windowGap,
             currentFrames: live,
-            minimumSize: { _ in Self.minimumSizeGuess })
+            minimumSize: { self.acceptedMinimums[$0] ?? Self.minimumSizeGuess })
         guard !adjustments.isEmpty else {
             SnapLog.event("link.no-adjust", "windowID=\(windowID) reason=moved-edge-faces-open-screen")
             return
@@ -623,6 +636,22 @@ final class SnapGroupStore {
     /// Deliberately never updates a member's stored zone: a linked resize is
     /// not a placement. Writing the live result back was exactly the bug that
     /// made a resize drag work for one step and then stop.
+    /// Writes every adjustment, puts any neighbour its own app refused to
+    /// shrink back flush against the screen edge its zone was anchored to, and
+    /// then pulls the resized window's edge back to meet it (spec §6, "the
+    /// divider stops at the minimum").
+    ///
+    /// The re-anchoring is the part a real capture found missing. An app that
+    /// clamps the size it was given generally keeps the origin, so a
+    /// right-anchored neighbour asked for 140pt came back 400pt wide *starting
+    /// where 140pt would have started* — off its screen edge, drifting toward
+    /// the centre, which is exactly what it looked like on screen. A neighbour
+    /// frame whose anchored edge does not match its zone's is never left
+    /// standing.
+    ///
+    /// Deliberately never updates a member's stored zone: a linked resize is
+    /// not a placement. Writing the live result back was the bug that made a
+    /// resize drag work for one step and then stop.
     private func apply(_ adjustments: [SnapLinkedResizeSupport.Adjustment],
                        resizedWindowID: CGWindowID,
                        oldFrame: CGRect,
@@ -639,17 +668,35 @@ final class SnapGroupStore {
             applied[adjustment.windowID] = write(adjustment.frame, to: adjustment.windowID)
         }
 
-        var discoveredMinimums: [CGWindowID: CGSize] = [:]
+        var clampedNeighbours: [CGWindowID: CGSize] = [:]
         for adjustment in adjustments where adjustment.windowID != resizedWindowID {
-            guard let actual = applied[adjustment.windowID],
+            guard let member = group.members.first(where: { $0.windowID == adjustment.windowID }),
+                  let actual = applied[adjustment.windowID],
                   abs(actual.width - adjustment.frame.width) > WindowLayoutGeometry.frameTolerance
                     || abs(actual.height - adjustment.frame.height) > WindowLayoutGeometry.frameTolerance
             else { continue }
-            discoveredMinimums[adjustment.windowID] = actual.size
-        }
-        guard !discoveredMinimums.isEmpty, ProcessInfo.processInfo.systemUptime < deadline else { return }
-        SnapLog.event("link.minimums", "discovered=\(discoveredMinimums.count), correcting the resized window")
+            clampedNeighbours[adjustment.windowID] = actual.size
+            acceptedMinimums[adjustment.windowID] = actual.size
 
+            let reanchored = SnapGroupSupport.reanchoredFrame(action: member.action,
+                                                              zone: member.frame,
+                                                              acceptedSize: actual.size)
+            SnapLog.event("link.clamped",
+                          "windowID=\(adjustment.windowID) action=\(member.action) "
+                              + "requested=\(SnapLog.rect(adjustment.frame)) accepted=\(SnapLog.rect(actual)) "
+                              + "reanchored=\(SnapLog.rect(reanchored))")
+            guard reanchored != actual, ProcessInfo.processInfo.systemUptime < deadline else {
+                applied[adjustment.windowID] = actual
+                continue
+            }
+            applied[adjustment.windowID] = write(reanchored, to: adjustment.windowID) ?? reanchored
+        }
+
+        guard !clampedNeighbours.isEmpty, ProcessInfo.processInfo.systemUptime < deadline else { return }
+
+        // Now that every clamped neighbour is back on its own edge, the
+        // resized window's own edge is recomputed against those real frames,
+        // which is what leaves the seam a single line instead of a gap.
         var live = applied
         live[resizedWindowID] = newFrame
         let corrected = SnapLinkedResizeSupport.adjustments(
@@ -660,8 +707,11 @@ final class SnapGroupStore {
             theoreticalZones: theoreticalZones,
             gap: WindowLayoutGaps.windowGap,
             currentFrames: live,
-            minimumSize: { discoveredMinimums[$0] ?? Self.minimumSizeGuess })
+            minimumSize: { clampedNeighbours[$0] ?? self.acceptedMinimums[$0] ?? Self.minimumSizeGuess })
         for adjustment in corrected where adjustment.windowID == resizedWindowID {
+            SnapLog.event("link.pushback",
+                          "windowID=\(resizedWindowID) to=\(SnapLog.rect(adjustment.frame)) "
+                              + "reason=neighbour-at-its-minimum")
             write(adjustment.frame, to: resizedWindowID)
         }
     }
