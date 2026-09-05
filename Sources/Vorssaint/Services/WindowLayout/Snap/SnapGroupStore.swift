@@ -157,6 +157,25 @@ final class SnapGroupStore {
         groups[screen.displayID]
     }
 
+    /// This screen's Snap Group members as the Snap Assist occupancy test
+    /// needs them: zone plus live frame, pruned first so a member that closed
+    /// or was dragged away cannot keep a cell reserved. `excluding` is the
+    /// window that was just placed, which is never its own obstacle.
+    func occupancyMembers(on screen: NSScreen,
+                          excluding windowID: CGWindowID) -> [SnapAssistSupport.OccupyingMember] {
+        let group = pruned(on: screen)
+        guard !group.members.isEmpty else { return [] }
+        let live = liveFrames(for: group, on: screen).frames
+        return group.members
+            .filter { $0.windowID != windowID }
+            .map {
+                SnapAssistSupport.OccupyingMember(windowID: $0.windowID,
+                                                  action: $0.action,
+                                                  zone: $0.frame,
+                                                  liveFrame: live[$0.windowID] ?? lastLiveFrames[$0.windowID])
+            }
+    }
+
     /// Live frames of every member on `screen`, ready for the divider hint.
     /// `nil` when there is no group there at all.
     func liveMemberFrames(on screen: NSScreen) -> [(windowID: CGWindowID, frame: CGRect)]? {

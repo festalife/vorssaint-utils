@@ -179,7 +179,9 @@ enum SnapAssistSupport {
 
     /// How much of a cell's own area some window has to cover before
     /// `cellIsOccupied` counts it as "parked there on purpose" rather than
-    /// merely passing through it. On-device testing (real desktop: Chrome,
+    /// merely passing through it — now only ever asked about a Snap Group
+    /// member (see `occupant`), for which it is a fallback to the zone match.
+    /// On-device testing (real desktop: Chrome,
     /// WhatsApp, System Settings, a terminal, all in their ordinary,
     /// never-snapped positions) found a much lower bar — half the cell's
     /// area — false-positive constantly: a Chrome window sized 620×652
@@ -193,6 +195,53 @@ enum SnapAssistSupport {
     /// never-tiled window is likely to reach by chance, while still well
     /// below what a real occupant covers.
     static let occupiedCoverageThreshold: CGFloat = 0.9
+
+    /// One Snap Group member, as the occupancy test needs to see it: the zone
+    /// it was placed into, and where it actually is right now (`nil` when
+    /// Accessibility could not be asked this round).
+    struct OccupyingMember: Equatable {
+        let windowID: CGWindowID
+        let action: WindowLayoutAction
+        let zone: CGRect
+        let liveFrame: CGRect?
+    }
+
+    /// Which member of this screen's Snap Group, if any, already holds `cell`.
+    ///
+    /// **Only a group member can occupy a cell.** Windows itself asks whether
+    /// the *snapped layout* already has something in that slot, not whether
+    /// some window happens to be sitting over it, and an earlier version of
+    /// this test — any on-screen window covering enough of the cell — was
+    /// wrong in exactly the way that shows up on a real desktop: an ordinary,
+    /// never-snapped window parked over the right half meant snapping left
+    /// offered no overlay at all, and picking a cell from the top bar never
+    /// asked about the others. The loop that conservative rule was guarding
+    /// against is prevented by the session itself now (one session per user
+    /// snap, never re-derived), so the rule can go.
+    ///
+    /// A member holds `cell` when it was *placed* there — its zone matches
+    /// `cellFrame` within `zoneTolerance`, which is the authoritative answer
+    /// and survives the member having since been resized — or, for a member
+    /// placed by some other route, when its live frame still covers
+    /// `occupiedCoverageThreshold` of the cell.
+    static func occupant(of cell: WindowLayoutAction,
+                         cellFrame: CGRect,
+                         members: [OccupyingMember],
+                         zoneTolerance: CGFloat) -> CGWindowID? {
+        for member in members {
+            if member.action == cell { return member.windowID }
+            if abs(member.zone.minX - cellFrame.minX) <= zoneTolerance,
+               abs(member.zone.minY - cellFrame.minY) <= zoneTolerance,
+               abs(member.zone.maxX - cellFrame.maxX) <= zoneTolerance,
+               abs(member.zone.maxY - cellFrame.maxY) <= zoneTolerance {
+                return member.windowID
+            }
+            if let liveFrame = member.liveFrame, cellIsOccupied(cellFrame: cellFrame, by: [liveFrame]) {
+                return member.windowID
+            }
+        }
+        return nil
+    }
 
     /// Whether some window in `frames` (AppKit space, matching `cellFrame`)
     /// already covers `occupiedCoverageThreshold` or more of `cellFrame` —

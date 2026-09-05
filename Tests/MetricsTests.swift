@@ -7257,6 +7257,50 @@ struct MetricsTests {
         expect(smReset.apply(.reset(reason: "Accessibility revoked")).to == .idle,
                "a reset returns to idle from any phase")
 
+        // MARK: Snap Assist cell occupancy
+
+        // Only a Snap Group member takes a cell out of the offer. The bug this
+        // replaces: an ordinary, never-snapped window parked over the right
+        // half meant snapping a window left offered no overlay at all.
+        let sacRightHalf = CGRect(x: 756, y: 0, width: 756, height: 949)
+        let sacLeftHalf = CGRect(x: 0, y: 0, width: 756, height: 949)
+
+        expect(SnapAssistSupport.occupant(of: .rightHalf, cellFrame: sacRightHalf,
+                                          members: [], zoneTolerance: 3) == nil,
+               "with no group members every sibling cell is free, whatever else is on screen")
+
+        let sacMemberByZone = SnapAssistSupport.OccupyingMember(windowID: 91, action: .rightHalf,
+                                                                zone: sacRightHalf,
+                                                                liveFrame: CGRect(x: 906, y: 0,
+                                                                                  width: 606, height: 949))
+        expect(SnapAssistSupport.occupant(of: .rightHalf, cellFrame: sacRightHalf,
+                                          members: [sacMemberByZone], zoneTolerance: 3) == 91,
+               "a member placed into the cell still holds it after being resized inside it")
+        expect(SnapAssistSupport.occupant(of: .leftHalf, cellFrame: sacLeftHalf,
+                                          members: [sacMemberByZone], zoneTolerance: 3) == nil,
+               "and holds only its own cell")
+
+        // A member whose zone came from a different route still counts when it
+        // actually covers the cell.
+        let sacMemberByCoverage = SnapAssistSupport.OccupyingMember(
+            windowID: 92,
+            action: .topRight,
+            zone: CGRect(x: 758, y: 2, width: 752, height: 945),
+            liveFrame: sacRightHalf)
+        expect(SnapAssistSupport.occupant(of: .rightHalf, cellFrame: sacRightHalf,
+                                          members: [sacMemberByCoverage], zoneTolerance: 3) == 92,
+               "a member whose live frame fills the cell holds it even when its zone was recorded elsewhere")
+
+        // A member that merely overlaps the cell does not hold it.
+        let sacIncidental = SnapAssistSupport.OccupyingMember(
+            windowID: 93,
+            action: .topLeft,
+            zone: CGRect(x: 0, y: 474, width: 756, height: 475),
+            liveFrame: CGRect(x: 700, y: 200, width: 620, height: 652))
+        expect(SnapAssistSupport.occupant(of: .rightHalf, cellFrame: sacRightHalf,
+                                          members: [sacIncidental], zoneTolerance: 3) == nil,
+               "a member that only partly overlaps the cell leaves it up for grabs")
+
         // MARK: Snap move vs resize, measured from the last live frame
 
         // The exact sequence captured on a real Mac. A window snapped to the

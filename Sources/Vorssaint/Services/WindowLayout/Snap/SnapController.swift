@@ -1222,20 +1222,20 @@ extension SnapController {
         presentAssist(cell: next, placedWindowID: windowID, screen: screen)
     }
 
-    /// Which of `action`'s sibling cells already have a window essentially
-    /// filling them. Read from live on-screen frames, not from group
-    /// membership, so a window the person put there by hand counts too — and
-    /// with a high coverage bar, so a window that merely happens to overlap a
-    /// cell does not (that false positive used to cancel sessions before they
-    /// opened).
+    /// Which of `action`'s sibling cells the Snap Group already holds.
+    ///
+    /// Only a group member can take a cell out of the offer — matching
+    /// Windows, which asks whether the snapped layout already has something in
+    /// that slot, not whether some window happens to be sitting over it. An
+    /// ordinary, never-snapped window parked over the right half no longer
+    /// means snapping left offers nothing.
     private func occupiedSiblings(of action: WindowLayoutAction,
                                   on screen: NSScreen,
                                   excluding windowID: CGWindowID) -> Set<WindowLayoutAction> {
         let cells = SnapAssistSupport.siblingZones(of: action)
         guard !cells.isEmpty else { return [] }
-        let frames = SnapAX.onScreenWindows(on: screen)
-            .filter { $0.windowID != windowID }
-            .map(\.appKitFrame)
+        let members = groups.occupancyMembers(on: screen, excluding: windowID)
+        let tolerance = max(3, WindowLayoutGaps.windowGap + 3)
         var occupied: Set<WindowLayoutAction> = []
         for cell in cells {
             let rect = WindowLayoutGeometry.rect(for: cell,
@@ -1243,7 +1243,13 @@ extension SnapController {
                                                  visibleFrame: screen.visibleFrame,
                                                  windowGap: WindowLayoutGaps.windowGap,
                                                  screenGap: WindowLayoutGaps.screenGap)
-            if SnapAssistSupport.cellIsOccupied(cellFrame: rect, by: frames) { occupied.insert(cell) }
+            let holder = SnapAssistSupport.occupant(of: cell, cellFrame: rect,
+                                                    members: members, zoneTolerance: tolerance)
+            SnapLog.event("assist.cell",
+                          "cell=\(cell) rect=\(SnapLog.rect(rect)) "
+                              + (holder.map { "occupied-by=\($0)" } ?? "free")
+                              + " members=\(members.count)")
+            if holder != nil { occupied.insert(cell) }
         }
         return occupied
     }
