@@ -6322,7 +6322,7 @@ struct MetricsTests {
         let sgAfterMaximize = SnapGroupSupport.updated(group: sgGroup,
                                                        windowID: 1,
                                                        action: .maximize,
-                                                       appliedFrame: CGRect(x: 0, y: 0, width: 1000, height: 600),
+                                                       zone: CGRect(x: 0, y: 0, width: 1000, height: 600),
                                                        preSnapSize: sgLeftZone.size,
                                                        currentFrames: [1: sgLeftZone])
         expect(sgAfterMaximize.members.isEmpty,
@@ -6332,7 +6332,7 @@ struct MetricsTests {
         let sgAfterRightHalf = SnapGroupSupport.updated(group: sgGroup,
                                                         windowID: 1,
                                                         action: .rightHalf,
-                                                        appliedFrame: sgRightZone,
+                                                        zone: sgRightZone,
                                                         preSnapSize: sgPreSnapSize,
                                                         currentFrames: [1: sgLeftZone])
         expect(sgAfterRightHalf.members == [SnapGroupMember(windowID: 1, action: .rightHalf, frame: sgRightZone,
@@ -6345,7 +6345,7 @@ struct MetricsTests {
         let sgGroupWithNewMember = SnapGroupSupport.updated(group: sgGroup,
                                                             windowID: 5,
                                                             action: .leftHalf,
-                                                            appliedFrame: sgLeftZone,
+                                                            zone: sgLeftZone,
                                                             preSnapSize: CGSize(width: 500, height: 400),
                                                             currentFrames: [1: sgLeftZone])
         expect(sgGroupWithNewMember.members.count == 2 && sgGroupOnOtherScreen.members.isEmpty,
@@ -6394,7 +6394,7 @@ struct MetricsTests {
         let sgServiceLikeGroup = SnapGroupSupport.updated(group: SnapGroup(screenID: 1),
                                                           windowID: 10,
                                                           action: .leftHalf,
-                                                          appliedFrame: sgRealLeftZone,
+                                                          zone: sgRealLeftZone,
                                                           preSnapSize: CGSize(width: 400, height: 949),
                                                           currentFrames: [:])
         expect(SnapGroupSupport.freeSpace(for: .rightHalf,
@@ -7316,6 +7316,96 @@ struct MetricsTests {
                "the resized window is pulled back to meet the neighbour's minimum, leaving one seam")
         expect(!lrPushback.contains(where: { $0.windowID == 2 }),
                "and the neighbour, already at its minimum on its own edge, is not written again")
+
+        // MARK: Stale Snap Group members
+
+        // The capture: a 1512x949 screen whose group still held two windows
+        // snapped in an earlier session — 5950 (rightHalf, not on screen at
+        // all) and 10776 (a terminal still visible but long since moved off
+        // its zone). Both went on being treated as neighbours.
+        let ghostLeftZone = CGRect(x: 0, y: 0, width: 756, height: 949)
+        let ghostRightZone = CGRect(x: 756, y: 0, width: 756, height: 949)
+        let ghostGhostLive = CGRect(x: 1407, y: 0, width: 105, height: 949)
+        let ghostGroup = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 5950, action: .rightHalf, frame: ghostRightZone),
+        ])
+
+        // A ghost still contributing its edge is what produced a 1407pt-wide
+        // "left half" of a 1512pt screen.
+        expect(SnapGroupSupport.freeSpace(for: .leftHalf, theoreticalZone: ghostLeftZone,
+                                          group: ghostGroup, gap: 0,
+                                          currentFrames: [5950: ghostGhostLive])
+               == CGRect(x: 0, y: 0, width: 1407, height: 949),
+               "a member left in the group really does stretch the next placement that far")
+
+        // Confirmed absent from the window server: dropped before any of that.
+        let ghostPrunedGone = SnapGroupSupport.pruned(group: ghostGroup, currentFrames: [:], gone: [5950])
+        expect(ghostPrunedGone.members.isEmpty, "a member no longer on screen leaves the group")
+        expect(SnapGroupSupport.freeSpace(for: .leftHalf, theoreticalZone: ghostLeftZone,
+                                          group: ghostPrunedGone, gap: 0,
+                                          currentFrames: [5950: ghostGhostLive]) == ghostLeftZone,
+               "with the ghost gone the placement gets its honest theoretical half back")
+
+        // Still on screen, but its fresh read shows it off its own anchors.
+        let ghostMovedGroup = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 10776, action: .rightHalf, frame: ghostRightZone),
+        ])
+        let ghostMovedLive = CGRect(x: 402, y: 118, width: 756, height: 949)
+        expect(SnapGroupSupport.pruned(group: ghostMovedGroup,
+                                       currentFrames: [10776: ghostMovedLive]).members.isEmpty,
+               "a member whose fresh frame has left its anchored edges leaves the group too")
+        expect(!SnapGroupSupport.stillAnchored(member: ghostMovedGroup.members[0],
+                                               currentFrame: ghostMovedLive, gap: 0),
+               "because its right edge is no longer flush with the screen's")
+
+        // A minimized member is the one exception: kept and marked.
+        let ghostMinimized = SnapGroupSupport.pruned(group: ghostMovedGroup, currentFrames: [:],
+                                                  minimized: [10776])
+        expect(ghostMinimized.members.first?.isMinimized == true,
+               "a minimized member keeps its cell rather than being treated as gone")
+
+        // MARK: A member's zone stays theoretical
+
+        // A left half placed into the space a shrunken neighbour left is
+        // written wider than a half — but it still *holds* the left half, and
+        // recording the wider rect as its zone made the next placement measure
+        // against an inflated "half" and grow again.
+        let zonePlaced = CGRect(x: 0, y: 0, width: 1000, height: 949)
+        let zoneGroup = SnapGroupSupport.updated(group: SnapGroup(screenID: 1),
+                                               windowID: 42,
+                                               action: .leftHalf,
+                                               zone: ghostLeftZone,
+                                               preSnapSize: CGSize(width: 900, height: 700),
+                                               currentFrames: [:])
+        expect(zoneGroup.members.first?.frame == ghostLeftZone,
+               "the member's zone is the theoretical half, not the rect the placement wrote")
+        expect(zonePlaced != ghostLeftZone,
+               "and the two really are different rectangles in this case")
+        expect(SnapGroupSupport.stillAnchored(member: zoneGroup.members[0],
+                                              currentFrame: zonePlaced, gap: 0),
+               "the wider placed frame is still anchored to that theoretical zone, so it stays a member")
+
+        // MARK: Free space never moves an anchored edge
+
+        // Whatever a neighbour's frame claims, only the shared edge may move.
+        let ghostOverreaching = CGRect(x: -300, y: -50, width: 1900, height: 1100)
+        expect(SnapGroupSupport.clampedToAnchors(ghostOverreaching, action: .leftHalf,
+                                                 theoreticalZone: ghostLeftZone)
+               == CGRect(x: 0, y: 0, width: 1600, height: 949),
+               "a left half keeps its left, top and bottom edges; only its right edge follows a neighbour")
+        expect(SnapGroupSupport.clampedToAnchors(ghostOverreaching, action: .rightHalf,
+                                                 theoreticalZone: ghostRightZone)
+               == CGRect(x: -300, y: 0, width: 1812, height: 949),
+               "a right half keeps its right, top and bottom edges instead")
+        let ghostQuarterZone = CGRect(x: 0, y: 474, width: 756, height: 475)
+        expect(SnapGroupSupport.clampedToAnchors(CGRect(x: -10, y: 400, width: 900, height: 600),
+                                                 action: .topLeft, theoreticalZone: ghostQuarterZone)
+               == CGRect(x: 0, y: 400, width: 890, height: 549),
+               "a corner pins the two screen edges it touches and lets its other two follow")
+        let ghostHonest = CGRect(x: 0, y: 0, width: 600, height: 949)
+        expect(SnapGroupSupport.clampedToAnchors(ghostHonest, action: .leftHalf, theoreticalZone: ghostLeftZone)
+               == ghostHonest,
+               "an answer that only moved the shared edge is passed through untouched")
 
         // MARK: Snap Assist cell occupancy
 

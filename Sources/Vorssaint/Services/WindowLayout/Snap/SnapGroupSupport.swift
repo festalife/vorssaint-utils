@@ -232,6 +232,16 @@ enum SnapGroupSupport {
     /// joins a group at all — maximizing, restoring, going full screen,
     /// centering or crossing to another display all simply drop the window
     /// instead.
+    /// `zone` is the placement's **theoretical** rect for `action` on that
+    /// screen — `WindowLayoutGeometry.rect`'s answer, never the frame a
+    /// free-space-adjusted placement actually wrote. Recording the adjusted
+    /// rect instead made a member's own zone grow with the space it had
+    /// borrowed from a neighbour, so the next placement measured against that
+    /// inflated rectangle and grew again: a plain left snap on a screen with
+    /// one stale member produced a 1407pt-wide "half" of a 1512pt screen. The
+    /// frame that was actually written is the member's first *live* frame and
+    /// belongs in `SnapGroupStore.lastLiveFrames`, not here.
+    ///
     /// `preSnapSize` is the window's own size the instant before *this*
     /// placement — `WindowLayoutService` always has it (the AX frame it
     /// read right before calling `setFrame`) and always passes it. Ignored
@@ -242,7 +252,7 @@ enum SnapGroupSupport {
     static func updated(group: SnapGroup,
                         windowID: CGWindowID,
                         action: WindowLayoutAction,
-                        appliedFrame: CGRect,
+                        zone: CGRect,
                         preSnapSize: CGSize,
                         currentFrames: [CGWindowID: CGRect],
                         gone: Set<CGWindowID> = [],
@@ -254,7 +264,7 @@ enum SnapGroupSupport {
         if joinsGroup(action) {
             let restoreSize = existingRestoreSize ?? preSnapSize
             result.members.append(SnapGroupMember(windowID: windowID, action: action,
-                                                  frame: appliedFrame, restoreSize: restoreSize))
+                                                  frame: zone, restoreSize: restoreSize))
         }
         return result
     }
@@ -362,6 +372,37 @@ enum SnapGroupSupport {
         let result = CGRect(x: minX, y: minY, width: max(0, maxX - minX), height: max(0, maxY - minY))
         guard result.width >= minimumSpace, result.height >= minimumSpace else { return theoreticalZone }
         return result
+    }
+
+    /// `free` with every edge `action` anchors to a *screen* edge forced back
+    /// to `theoreticalZone`'s own value.
+    ///
+    /// A neighbour may only ever move the edge it shares with this zone. The
+    /// other edges are pinned to the screen itself by the placement's own
+    /// definition — a left half is flush left, top and bottom, whatever its
+    /// right edge does — so any answer that moves one of them came from
+    /// something that is not true: a member that has since been moved, closed,
+    /// or read back at a nonsense frame. Clamping here bounds what a single
+    /// bad reading can do to a placement, on top of the pruning that should
+    /// have dropped that member in the first place.
+    ///
+    /// The shared edge itself is deliberately left alone: spec §5 wants it to
+    /// follow the neighbour in both directions, shrinking when the neighbour
+    /// grows and extending when it shrinks.
+    static func clampedToAnchors(_ free: CGRect,
+                                 action: WindowLayoutAction,
+                                 theoreticalZone: CGRect) -> CGRect {
+        let edges = anchoredEdges(for: action)
+        guard !edges.isEmpty else { return free }
+        var minX = free.minX
+        var maxX = free.maxX
+        var minY = free.minY
+        var maxY = free.maxY
+        if edges.contains(.minX) { minX = theoreticalZone.minX }
+        if edges.contains(.maxX) { maxX = theoreticalZone.maxX }
+        if edges.contains(.minY) { minY = theoreticalZone.minY }
+        if edges.contains(.maxY) { maxY = theoreticalZone.maxY }
+        return CGRect(x: minX, y: minY, width: max(0, maxX - minX), height: max(0, maxY - minY))
     }
 
     /// Where a member has to sit when its app refuses to shrink to the size a

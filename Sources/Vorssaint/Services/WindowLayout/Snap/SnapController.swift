@@ -169,6 +169,11 @@ final class SnapController {
     /// here is created on demand — but it bookends the log.
     func tapStarted() {
         SnapLog.event("tap.start")
+        // The tap starts when the feature is switched on and when
+        // Accessibility is granted, which are exactly the moments any
+        // membership still on record is from a different world. Windows
+        // snapped before a settings flip must never come back as neighbours.
+        groups.resetAll(reason: "edge-snap tap started")
     }
 
     /// The tap was torn down, so no pointer event can arrive any more: every

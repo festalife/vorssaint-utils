@@ -36,9 +36,11 @@ final class SnapGroupStore {
     private let watcher = SnapLinkedResizeWatcher()
     private var watcherEnabled = false
 
-    /// The last frame each member was actually observed at — set by a
-    /// placement, by every notification processed, and by every frame this
-    /// store writes itself.
+    /// The last frame each member was actually observed at, and when — set by
+    /// a placement, by every notification processed, and by every frame this
+    /// store writes itself. The timestamp is what keeps a remembered frame
+    /// from being trusted forever: past `cachedFrameLifetime` it is no longer
+    /// evidence of anything.
     ///
     /// Deliberately separate from `SnapGroupMember.frame`. The zone must stay
     /// fixed (it is what decides adjacency), but "did this window move or was
@@ -46,7 +48,12 @@ final class SnapGroupStore {
     /// Comparing a live frame against the zone instead is a bug that only
     /// appears *after* a linked resize, when the two have legitimately
     /// diverged — see `SnapMemberMotion` for the capture that found it.
-    private var lastLiveFrames: [CGWindowID: CGRect] = [:]
+    private var lastLiveFrames: [CGWindowID: (frame: CGRect, at: TimeInterval)] = [:]
+    /// How long a remembered frame may still stand in for a live read that
+    /// did not land. Long enough to cover a slow app for several pointer
+    /// samples, far too short to let a window that has since been moved or
+    /// closed keep distorting a placement.
+    private static let cachedFrameLifetime: TimeInterval = 2
 
     /// The smallest size each member's app has actually been observed to
     /// accept. Accessibility cannot be asked for this, so it is only ever
@@ -111,24 +118,60 @@ final class SnapGroupStore {
                 on screen: NSScreen) {
         let existing = groups[screen.displayID] ?? SnapGroup(screenID: screen.displayID)
         let snapshot = liveFrames(for: existing, on: screen)
+        // The member's zone is the action's *theoretical* rect on this screen,
+        // never the rect the placement actually wrote. The two differ exactly
+        // when free space borrowed room from a neighbour, and recording the
+        // borrowed rect made the zone grow with it — so the next placement
+        // measured against an inflated "half" and grew again.
+        let zone = theoreticalZone(for: action, on: screen)
         let updated = SnapGroupSupport.updated(group: existing,
                                                windowID: windowID,
                                                action: action,
-                                               appliedFrame: appliedRect,
+                                               zone: zone,
                                                preSnapSize: preSnapSize,
                                                currentFrames: snapshot.frames,
                                                gone: snapshot.gone,
                                                minimized: snapshot.minimized,
                                                gap: WindowLayoutGaps.windowGap)
         store(updated, on: screen.displayID)
-        // A placement resets the motion reference: the window is now exactly
-        // where it was put, zone and live frame agreeing again.
-        lastLiveFrames[windowID] = appliedRect
+        // The frame that was actually written is the member's first live
+        // frame: where it is, as opposed to which cell it holds.
+        observe(appliedRect, for: windowID)
         acceptedMinimums.removeValue(forKey: windowID)
         SnapLog.event("group.join",
                       "windowID=\(windowID) action=\(action) screen=\(screen.displayID) "
-                          + "rect=\(SnapLog.rect(appliedRect)) members=\(updated.members.count) "
-                          + "zones=[\(Self.describe(updated))]")
+                          + "zone=\(SnapLog.rect(zone)) placed=\(SnapLog.rect(appliedRect)) "
+                          + "members=\(updated.members.count) zones=[\(Self.describe(updated))]")
+        syncWatcher(enabled: watcherEnabled)
+    }
+
+    /// The theoretical rect of `action` on `screen` — the only thing a
+    /// member's zone is ever allowed to be.
+    private func theoreticalZone(for action: WindowLayoutAction, on screen: NSScreen) -> CGRect {
+        WindowLayoutGeometry.rect(for: action,
+                                  current: screen.visibleFrame,
+                                  visibleFrame: screen.visibleFrame,
+                                  windowGap: WindowLayoutGaps.windowGap,
+                                  screenGap: WindowLayoutGaps.screenGap)
+    }
+
+    private func observe(_ frame: CGRect, for windowID: CGWindowID) {
+        lastLiveFrames[windowID] = (frame, ProcessInfo.processInfo.systemUptime)
+    }
+
+    /// Forgets every group, every remembered frame and every discovered
+    /// minimum. Called when the edge-snap tap starts — which is also when
+    /// Accessibility is granted and when the feature is switched back on — so
+    /// membership recorded before a settings flip, a permission change or a
+    /// long idle period can never come back to distort a placement.
+    func resetAll(reason: String) {
+        guard !groups.isEmpty || !lastLiveFrames.isEmpty || !acceptedMinimums.isEmpty else { return }
+        SnapLog.event("group.reset", "reason=\(reason) groups=\(groups.count)")
+        groups.removeAll()
+        lastLiveFrames.removeAll()
+        acceptedMinimums.removeAll()
+        selfWrites.removeAll()
+        framesCache.removeAll()
         syncWatcher(enabled: watcherEnabled)
     }
 
@@ -176,14 +219,14 @@ final class SnapGroupStore {
                           excluding windowID: CGWindowID) -> [SnapAssistSupport.OccupyingMember] {
         let group = pruned(on: screen)
         guard !group.members.isEmpty else { return [] }
-        let live = liveFrames(for: group, on: screen).frames
+        let resolved = resolvedFrames(for: group, on: screen)
         return group.members
             .filter { $0.windowID != windowID }
             .map {
                 SnapAssistSupport.OccupyingMember(windowID: $0.windowID,
                                                   action: $0.action,
                                                   zone: $0.frame,
-                                                  liveFrame: live[$0.windowID] ?? lastLiveFrames[$0.windowID])
+                                                  liveFrame: resolved.frames[$0.windowID])
             }
     }
 
@@ -253,11 +296,21 @@ final class SnapGroupStore {
         guard !group.members.isEmpty else { return theoreticalZone }
 
         let resolved = resolvedFrames(for: group, on: screen)
-        let result = SnapGroupSupport.freeSpace(for: action,
-                                                theoreticalZone: theoreticalZone,
-                                                group: group,
-                                                gap: WindowLayoutGaps.windowGap,
-                                                currentFrames: resolved.frames)
+        let raw = SnapGroupSupport.freeSpace(for: action,
+                                             theoreticalZone: theoreticalZone,
+                                             group: group,
+                                             gap: WindowLayoutGaps.windowGap,
+                                             currentFrames: resolved.frames)
+        // A neighbour may only move the edge it shares with this zone; every
+        // edge the placement anchors to a screen edge stays where the screen
+        // put it, whatever a neighbour's frame claims.
+        let result = SnapGroupSupport.clampedToAnchors(raw, action: action,
+                                                       theoreticalZone: theoreticalZone)
+        if result != raw {
+            SnapLog.event("free.clamp",
+                          "action=\(action) raw=\(SnapLog.rect(raw)) -> \(SnapLog.rect(result)) "
+                              + "reason=neighbour-moved-an-anchored-edge")
+        }
         // Logged whether or not the zone changed: "why did this placement get
         // the plain theoretical half" is exactly the question a transcript has
         // to answer, and silence when nothing changed answered it least.
@@ -291,6 +344,12 @@ final class SnapGroupStore {
         var frames: [CGWindowID: CGRect] = [:]
         var gone: Set<CGWindowID> = []
         var minimized: Set<CGWindowID> = []
+        /// Which members the window server showed on this screen during the
+        /// sweep — carried on the snapshot so it is cached with everything
+        /// else. `resolvedFrames` is asked on every pointer sample during a
+        /// drag; a second uncached `CGWindowList` scan there would undo the
+        /// whole point of the cache.
+        var onScreen: Set<CGWindowID> = []
     }
 
     func liveFrames(for group: SnapGroup, on screen: NSScreen) -> GroupFrames {
@@ -298,19 +357,46 @@ final class SnapGroupStore {
         if let cached = framesCache[screen.displayID], now - cached.at < Self.framesCacheTTL {
             return cached.snapshot
         }
-        let snapshot = readFrames(for: group)
+        let snapshot = readFrames(for: group, on: screen)
         framesCache[screen.displayID] = (snapshot, now)
         return snapshot
     }
 
-    private func readFrames(for group: SnapGroup) -> GroupFrames {
+    /// One sweep. A member is `gone` when the window server no longer shows it
+    /// on this screen at layer 0 and Accessibility does not say it is merely
+    /// minimized — closed, moved to another Space, or moved to another
+    /// display. Keeping such a member was the ghost bug: windows snapped in an
+    /// earlier session went on contributing an edge to every free-space
+    /// computation and went on holding their cell against Snap Assist, long
+    /// after they had stopped being part of anything.
+    private func readFrames(for group: SnapGroup, on screen: NSScreen) -> GroupFrames {
         guard !group.members.isEmpty else { return GroupFrames() }
         let owners = SnapAX.ownerPIDs()
+        let onScreen = Set(SnapAX.onScreenWindows(on: screen).map(\.windowID))
         var apps: [pid_t: AXUIElement] = [:]
         var snapshot = GroupFrames()
+        snapshot.onScreen = onScreen.intersection(group.members.map(\.windowID))
         for member in group.members {
             guard let pid = owners[member.windowID] else {
                 snapshot.gone.insert(member.windowID)
+                continue
+            }
+            if !onScreen.contains(member.windowID) {
+                // Not on this screen right now. Minimized is the one case that
+                // keeps its place in the group (spec §7); everything else has
+                // left, and a member that has left may not keep reserving a
+                // cell or shrinking a zone.
+                let axApp = apps[pid] ?? {
+                    let created = SnapAX.application(pid, timeout: SnapAX.Timeout.neighbour)
+                    apps[pid] = created
+                    return created
+                }()
+                if let element = SnapAX.window(member.windowID, in: axApp, timeout: SnapAX.Timeout.neighbour),
+                   SnapAX.isMinimized(element) {
+                    snapshot.minimized.insert(member.windowID)
+                } else {
+                    snapshot.gone.insert(member.windowID)
+                }
                 continue
             }
             let axApp = apps[pid] ?? {
@@ -334,7 +420,7 @@ final class SnapGroupStore {
             // member, so it becomes the fallback every later sweep that misses
             // will use — and the reference the move-vs-resize test measures
             // from.
-            lastLiveFrames[member.windowID] = frame
+            observe(frame, for: member.windowID)
         }
         return snapshot
     }
@@ -356,6 +442,7 @@ final class SnapGroupStore {
                                 on screen: NSScreen) -> (frames: [CGWindowID: CGRect],
                                                          sources: [CGWindowID: String]) {
         let snapshot = liveFrames(for: group, on: screen)
+        let now = ProcessInfo.processInfo.systemUptime
         var frames: [CGWindowID: CGRect] = [:]
         var sources: [CGWindowID: String] = [:]
         for member in group.members {
@@ -366,11 +453,17 @@ final class SnapGroupStore {
                 sources[member.windowID] = "gone"
             } else if snapshot.minimized.contains(member.windowID) {
                 sources[member.windowID] = "minimized"
-            } else if let cached = lastLiveFrames[member.windowID] {
-                frames[member.windowID] = cached
+            } else if let cached = lastLiveFrames[member.windowID],
+                      now - cached.at < Self.cachedFrameLifetime,
+                      snapshot.onScreen.contains(member.windowID) {
+                frames[member.windowID] = cached.frame
                 sources[member.windowID] = "cached"
             } else {
-                sources[member.windowID] = "unknown"
+                // No usable answer. The member contributes no edge at all this
+                // round rather than an old one: a stale frame is worse than
+                // none, because it silently distorts a placement instead of
+                // leaving it at its honest theoretical zone.
+                sources[member.windowID] = "stale"
             }
         }
         return (frames, sources)
@@ -477,7 +570,7 @@ final class SnapGroupStore {
         selfWrites[windowID] = (actual, ProcessInfo.processInfo.systemUptime)
         // A frame this store wrote is the member's new observed position, so
         // the next notification is measured from here, not from before it.
-        lastLiveFrames[windowID] = actual
+        observe(actual, for: windowID)
         framesCache.removeAll()
         SnapLog.event("link.write",
                       "windowID=\(windowID) requested=\(SnapLog.rect(rect)) actual=\(SnapLog.rect(actual))")
@@ -552,10 +645,10 @@ final class SnapGroupStore {
         // zone, which a linked resize legitimately leaves behind. Falls back
         // to the zone only for a member that has not been observed since it
         // joined, where the two are the same thing anyway.
-        let reference = lastLiveFrames[windowID] ?? member.frame
+        let reference = lastLiveFrames[windowID]?.frame ?? member.frame
         let motion = SnapMemberMotion.classify(lastLiveFrame: reference, newFrame: newFrame)
         framesCache.removeAll()
-        lastLiveFrames[windowID] = newFrame
+        observe(newFrame, for: windowID)
         SnapLog.event("link.notify",
                       "windowID=\(windowID) app=\(SnapLinkedResizeWatcher.label(for: pid)) "
                           + "zone=\(SnapLog.rect(member.frame)) was=\(SnapLog.rect(reference)) "
