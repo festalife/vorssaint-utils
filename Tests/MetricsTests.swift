@@ -7722,6 +7722,38 @@ struct MetricsTests {
                                                         isClickInFlight: true),
                "and a resign between a card's mouseDown and mouseUp must not cut the pick off")
 
+        // MARK: Snap Assist candidate order across the three tiers
+
+        // Windows of an app hidden with Cmd-H are neither on screen nor
+        // minimized, so nothing enumerated them and a person who had put an
+        // app away could not pick its windows at all. They are a third tier,
+        // after the ones that are visible and the ones that are minimized:
+        // something in front of you is a more useful first card than something
+        // you put away, however recently you last touched it.
+        expect(SnapAssistSupport.mergedCandidates(onScreen: [3, 1],
+                                                  minimized: [4],
+                                                  hidden: [5],
+                                                  mru: [5, 4, 1, 3])
+               == [1, 3, 4, 5],
+               "tiers first, most recently used within each")
+        expect(SnapAssistSupport.mergedCandidates(onScreen: [7, 8],
+                                                  minimized: [],
+                                                  hidden: [],
+                                                  mru: [])
+               == [7, 8],
+               "windows the MRU has never heard of keep the order they were enumerated in")
+        expect(SnapAssistSupport.mergedCandidates(onScreen: [1, 2],
+                                                  minimized: [2, 3],
+                                                  hidden: [1, 3, 4],
+                                                  mru: [4, 3, 2, 1])
+               == [2, 1, 3, 4],
+               "a window found in more than one tier is offered once, in the first tier that has it")
+        expect(SnapAssistSupport.mergedCandidates(onScreen: [], minimized: [], hidden: [9], mru: [9])
+               == [9],
+               "a hidden app's window is offered even when it is the only candidate there is")
+        expect(SnapAssistSupport.mergedCandidates(onScreen: [], minimized: [], hidden: [], mru: [1, 2]).isEmpty,
+               "and an MRU listing windows none of the tiers found offers nothing")
+
         // MARK: Snap Assist cell occupancy
 
         // Only a Snap Group member takes a cell out of the offer. The bug this

@@ -1445,6 +1445,11 @@ extension SnapController {
             AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         }
         guard let app = NSRunningApplication(processIdentifier: pid) else { return }
+        if app.isHidden {
+            // Cmd-H is undone the same way un-minimizing is: the person picked
+            // the window, so they want to see it.
+            SnapLog.event("assist.unhide", "pid=\(pid) app=\(app.localizedName ?? "?")")
+        }
         app.unhide()
         AXUIElementSetAttributeValue(axApp, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(axApp, kAXMainWindowAttribute as CFString, window)
@@ -1468,6 +1473,9 @@ extension SnapController {
     /// none of which have anything to do with Snap Assist.
     private func candidates(on screen: NSScreen, excluding excluded: Set<CGWindowID>) -> [SwitcherItem] {
         var byWindowID: [CGWindowID: SwitcherItem] = [:]
+        var onScreenIDs: [CGWindowID] = []
+        var minimizedIDs: [CGWindowID] = []
+        var hiddenIDs: [CGWindowID] = []
         var enumerated = 0
         var dropped: [String: Int] = [:]
         var axApps: [pid_t: AXUIElement] = [:]
@@ -1497,45 +1505,81 @@ extension SnapController {
                                                   pid: window.ownerPID,
                                                   isOnScreen: true,
                                                   frame: window.quartzFrame)
+            onScreenIDs.append(window.windowID)
         }
 
+        // Neither of the next two kinds of window appears in an on-screen
+        // enumeration, so each needs its own Accessibility walk.
         for app in NSWorkspace.shared.runningApplications
         where app.activationPolicy == .regular && !app.isTerminated && app.processIdentifier != ownPID {
             guard let windows = SnapAX.windows(of: axApp(app.processIdentifier)) else { continue }
+            let appIsHidden = app.isHidden
             for element in windows {
-                guard SnapAX.isMinimized(element),
-                      let windowID = AXWindowResolver.windowID(for: element)
+                guard let windowID = AXWindowResolver.windowID(for: element),
+                      byWindowID[windowID] == nil
                 else { continue }
+                let isMinimized = SnapAX.isMinimized(element)
+                // A window of a hidden app is neither on screen nor minimized,
+                // which is exactly why nothing used to enumerate it: a person
+                // who had put an app away with Cmd-H could not pick its
+                // windows at all.
+                guard isMinimized || appIsHidden else { continue }
                 enumerated += 1
                 guard !excluded.contains(windowID) else { drop("holds a cell of this layout"); continue }
-                guard byWindowID[windowID] == nil else { continue }
                 guard SnapAX.isPlaceableWindow(element, allowMinimized: true) else {
                     drop("not placeable")
                     continue
                 }
-                let quartz = SnapAX.quartzFrame(of: element) ?? .zero
+                guard let quartz = SnapAX.quartzFrame(of: element) else { drop("no frame"); continue }
+                if !isMinimized {
+                    // A hidden app's windows keep real frames, so one parked on
+                    // another display — or another Space, which reads the same
+                    // way — is still not something to offer for this screen. A
+                    // minimized window has no meaningful position to test.
+                    guard quartz.width >= Self.hiddenWindowMinimumSize.width,
+                          quartz.height >= Self.hiddenWindowMinimumSize.height
+                    else { drop("too small to tile"); continue }
+                    guard screen.frame.intersects(SnapAX.appKitRect(fromQuartz: quartz)) else {
+                        drop("on another screen or Space")
+                        continue
+                    }
+                }
                 byWindowID[windowID] = .window(id: windowID,
                                                title: SnapAX.stringAttribute(element, kAXTitleAttribute as String) ?? "",
                                                appName: app.localizedName ?? "",
                                                pid: app.processIdentifier,
                                                isOnScreen: false,
-                                               isMinimized: true,
+                                               isAppHidden: appIsHidden,
+                                               isMinimized: isMinimized,
                                                frame: quartz)
+                if isMinimized {
+                    minimizedIDs.append(windowID)
+                } else {
+                    hiddenIDs.append(windowID)
+                }
             }
         }
 
-        let mru = WindowUseTracker.shared.windows.filter { byWindowID[$0] != nil }
-        var ordered = mru.compactMap { byWindowID[$0] }
-        let seen = Set(mru)
-        ordered.append(contentsOf: byWindowID.keys.filter { !seen.contains($0) }.compactMap { byWindowID[$0] })
+        let order = SnapAssistSupport.mergedCandidates(onScreen: onScreenIDs,
+                                                       minimized: minimizedIDs,
+                                                       hidden: hiddenIDs,
+                                                       mru: WindowUseTracker.shared.windows)
+        let ordered = order.compactMap { byWindowID[$0] }
         let dropSummary = dropped.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
-        let order = ordered.map { "\($0.windowID.map(String.init) ?? "?"):\($0.displayTitle)" }
+        let listing = ordered.map { "\($0.windowID.map(String.init) ?? "?"):\($0.displayTitle)" }
             .joined(separator: " | ")
         SnapLog.event("assist.candidates",
                       "screen=\(screen.displayID) enumerated=\(enumerated) offered=\(ordered.count) "
-                          + "dropped=[\(dropSummary)] order=[\(order)]")
+                          + "onScreen=\(onScreenIDs.count) minimized=\(minimizedIDs.count) "
+                          + "hidden=\(hiddenIDs.count) dropped=[\(dropSummary)] order=[\(listing)]")
         return ordered
     }
+
+    /// A hidden app's windows keep whatever size they had, including panels
+    /// and inspectors far too small to be worth tiling. On-screen windows are
+    /// filtered by `SnapAX.minimumWindowSide` already; this is the stricter
+    /// bar for something the person cannot currently see to judge.
+    private static let hiddenWindowMinimumSize = CGSize(width: 200, height: 100)
 
     /// Ends the session without an overlay dismissal having happened — the
     /// controller itself deciding there is nothing to offer.

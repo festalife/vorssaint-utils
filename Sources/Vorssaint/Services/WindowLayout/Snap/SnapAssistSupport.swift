@@ -270,6 +270,38 @@ enum SnapAssistSupport {
         mru.filter { !excluded.contains($0) }
     }
 
+    /// The order the overlay offers windows in, from the three ways a window
+    /// can be found (spec §4 point 1: "most recently used first").
+    ///
+    /// Three tiers, in this order: windows visible on this screen, then
+    /// minimized ones, then windows belonging to apps hidden with Cmd-H. A
+    /// hidden app's windows are neither on screen nor minimized, so nothing
+    /// enumerated them at all and a person who had hidden an app simply could
+    /// not pick its windows.
+    ///
+    /// Tiers rather than one flat most-recently-used list because the three
+    /// are not equally reachable: something in front of you now is a more
+    /// useful first card than something you put away, however recently you
+    /// last touched it. Within each tier `mru` decides, with anything the MRU
+    /// has never heard of keeping its enumeration order after. A window found
+    /// in more than one tier is offered once, in the first tier that has it.
+    static func mergedCandidates(onScreen: [CGWindowID],
+                                 minimized: [CGWindowID],
+                                 hidden: [CGWindowID],
+                                 mru: [CGWindowID]) -> [CGWindowID] {
+        var seen = Set<CGWindowID>()
+        var result: [CGWindowID] = []
+        for tier in [onScreen, minimized, hidden] {
+            let inTier = Set(tier)
+            let byRecency = mru.filter { inTier.contains($0) }
+            let rest = tier.filter { !mru.contains($0) }
+            for windowID in byRecency + rest where seen.insert(windowID).inserted {
+                result.append(windowID)
+            }
+        }
+        return result
+    }
+
     /// How many columns a grid of `count` thumbnails should use to fit
     /// `boundsWidth` at roughly `itemWidth` each with `spacing` between,
     /// capped at `maxColumns` and never more than `count` itself (an empty
