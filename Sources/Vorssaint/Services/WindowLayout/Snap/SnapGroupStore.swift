@@ -241,25 +241,31 @@ final class SnapGroupStore {
         if let windowID { group.members.removeAll { $0.windowID == windowID } }
         guard !group.members.isEmpty else { return theoreticalZone }
 
-        let live = liveFrames(for: group, on: screen).frames
+        let resolved = resolvedFrames(for: group, on: screen)
         let result = SnapGroupSupport.freeSpace(for: action,
                                                 theoreticalZone: theoreticalZone,
                                                 group: group,
                                                 gap: WindowLayoutGaps.windowGap,
-                                                currentFrames: live)
+                                                currentFrames: resolved.frames)
+        // Logged whether or not the zone changed: "why did this placement get
+        // the plain theoretical half" is exactly the question a transcript has
+        // to answer, and silence when nothing changed answered it least.
+        let neighbours = group.members.map { member in
+            "\(member.windowID):\(member.action) zone=\(SnapLog.rect(member.frame)) "
+                + "used=\(SnapLog.rect(resolved.frames[member.windowID])) "
+                + "source=\(resolved.sources[member.windowID] ?? "unknown")"
+        }.joined(separator: " | ")
         guard result.width.isFinite, result.height.isFinite, result.width > 0, result.height > 0 else {
             SnapLog.event("free.discard",
-                          "action=\(action) theoretical=\(SnapLog.rect(theoreticalZone)) degenerate=\(SnapLog.rect(result))")
+                          "action=\(action) theoretical=\(SnapLog.rect(theoreticalZone)) "
+                              + "degenerate=\(SnapLog.rect(result)) neighbours=[\(neighbours)]")
             return theoreticalZone
         }
-        if result != theoreticalZone {
-            let neighbours = group.members.map { member in
-                "\(member.windowID):\(member.action)@\(SnapLog.rect(live[member.windowID]))"
-            }.joined(separator: ",")
-            SnapLog.event("free.space",
-                          "action=\(action) theoretical=\(SnapLog.rect(theoreticalZone)) "
-                              + "-> \(SnapLog.rect(result)) neighbours=[\(neighbours)]")
-        }
+        SnapLog.event("free.space",
+                      "action=\(action) theoretical=\(SnapLog.rect(theoreticalZone)) "
+                          + "-> \(SnapLog.rect(result))"
+                          + (result == theoreticalZone ? " (unchanged)" : "")
+                          + " neighbours=[\(neighbours)]")
         return result
     }
 
@@ -313,8 +319,50 @@ final class SnapGroupStore {
             }
             guard let frame = SnapAX.frameRetrying(of: element) else { continue }
             snapshot.frames[member.windowID] = frame
+            // A fresh answer is the newest thing anyone knows about this
+            // member, so it becomes the fallback every later sweep that misses
+            // will use — and the reference the move-vs-resize test measures
+            // from.
+            lastLiveFrames[member.windowID] = frame
         }
         return snapshot
+    }
+
+    /// A live frame for every member, and where each one came from: the
+    /// Accessibility sweep this instant (`fresh`), or the last frame the
+    /// member was actually observed at (`cached`).
+    ///
+    /// A read that times out is not information, and treating it as one is
+    /// what made free space unreliable: a member whose read missed simply
+    /// contributed no edge, so a placement silently fell back to the plain
+    /// theoretical half — "A snapped left, dragging B to the right edge does
+    /// not always fill the remaining space". A remembered frame from a moment
+    /// ago is a far better answer than no answer, and it is exactly the frame
+    /// that member is still at unless something moved it, in which case a
+    /// notification is already on its way. Members confirmed `gone` or
+    /// `minimized` contribute nothing either way.
+    private func resolvedFrames(for group: SnapGroup,
+                                on screen: NSScreen) -> (frames: [CGWindowID: CGRect],
+                                                         sources: [CGWindowID: String]) {
+        let snapshot = liveFrames(for: group, on: screen)
+        var frames: [CGWindowID: CGRect] = [:]
+        var sources: [CGWindowID: String] = [:]
+        for member in group.members {
+            if let fresh = snapshot.frames[member.windowID] {
+                frames[member.windowID] = fresh
+                sources[member.windowID] = "fresh"
+            } else if snapshot.gone.contains(member.windowID) {
+                sources[member.windowID] = "gone"
+            } else if snapshot.minimized.contains(member.windowID) {
+                sources[member.windowID] = "minimized"
+            } else if let cached = lastLiveFrames[member.windowID] {
+                frames[member.windowID] = cached
+                sources[member.windowID] = "cached"
+            } else {
+                sources[member.windowID] = "unknown"
+            }
+        }
+        return (frames, sources)
     }
 
     /// Every member's *theoretical* zone on `screen` — the action's own rect,
@@ -527,7 +575,10 @@ final class SnapGroupStore {
             return
         }
         let zones = theoreticalZones(for: group, on: screen)
-        var live = readFrames(for: group).frames
+        // Same reasoning as free space: a neighbour whose read missed is
+        // better represented by where it last actually was than by being left
+        // out of the computation entirely.
+        var live = resolvedFrames(for: group, on: screen).frames
         live[windowID] = newFrame
 
         let adjustments = SnapLinkedResizeSupport.adjustments(
