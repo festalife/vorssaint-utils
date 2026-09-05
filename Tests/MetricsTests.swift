@@ -7514,6 +7514,88 @@ struct MetricsTests {
         expect(!lrPushback.contains(where: { $0.windowID == 2 }),
                "and the neighbour, already at its minimum on its own edge, is not written again")
 
+        // MARK: One window per zone
+
+        // A person who snaps Notes left, then the terminal left, then WhatsApp
+        // left had a group holding three members all claiming leftHalf: all
+        // still on screen, all still anchored, so nothing ever pruned them.
+        // Free space was then taken from whichever was consulted, every cell
+        // read as occupied, and — since every member is kept out of the
+        // candidate list — the overlay could offer only minimized apps.
+        let ozLeft = CGRect(x: 0, y: 0, width: 756, height: 949)
+        let ozRight = CGRect(x: 756, y: 0, width: 756, height: 949)
+        let ozTopLeft = CGRect(x: 0, y: 474, width: 756, height: 475)
+
+        let ozThreeLefts = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 14733, action: .leftHalf, frame: ozLeft),
+            SnapGroupMember(windowID: 10776, action: .leftHalf, frame: ozLeft),
+            SnapGroupMember(windowID: 14806, action: .leftHalf, frame: ozLeft),
+        ])
+        let ozEvicted = SnapGroupSupport.evictions(from: ozThreeLefts, placing: 99,
+                                                   zone: ozLeft, appliedFrame: ozLeft)
+        expect(ozEvicted.count == 3 && ozEvicted.allSatisfy { $0.reason == .zoneTaken },
+               "placing a window into a zone evicts every previous occupant of that zone")
+
+        // The two-window case, which is the one that actually happens.
+        let ozOneLeft = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 1, action: .leftHalf, frame: ozLeft),
+        ])
+        expect(SnapGroupSupport.evictions(from: ozOneLeft, placing: 2,
+                                          zone: ozLeft, appliedFrame: ozLeft)
+               .map(\.windowID) == [1],
+               "a second left-half placement displaces the first")
+        expect(SnapGroupSupport.evictions(from: ozOneLeft, placing: 2,
+                                          zone: ozRight, appliedFrame: ozRight).isEmpty,
+               "but the other half is a neighbour, not a replacement")
+
+        // A different layout family takes over: a quarter over a half, and the
+        // other way round.
+        let ozQuarterOverHalf = SnapGroupSupport.evictions(from: ozOneLeft, placing: 2,
+                                                            zone: ozTopLeft, appliedFrame: ozTopLeft)
+        expect(ozQuarterOverHalf.map(\.windowID) == [1] && ozQuarterOverHalf[0].reason == .zoneOverlap,
+               "a top-left quarter replaces the left half it is carved out of")
+        let ozHalfOverQuarter = SnapGroupSupport.evictions(
+            from: SnapGroup(screenID: 1, members: [SnapGroupMember(windowID: 1, action: .topLeft, frame: ozTopLeft)]),
+            placing: 2, zone: ozLeft, appliedFrame: ozLeft)
+        expect(ozHalfOverQuarter.map(\.windowID) == [1] && ozHalfOverQuarter[0].reason == .zoneOverlap,
+               "and a left half replaces the quarter inside it")
+
+        // A member the new placement has simply landed on top of.
+        let ozCovered = SnapGroupSupport.evictions(
+            from: SnapGroup(screenID: 1, members: [SnapGroupMember(windowID: 5, action: .rightHalf, frame: ozRight)]),
+            placing: 2, zone: ozRight.offsetBy(dx: 4000, dy: 0),
+            appliedFrame: ozRight,
+            currentFrames: [5: ozRight])
+        expect(ozCovered.map(\.reason) == [.covered],
+               "a member the new placement's own frame now covers leaves too")
+
+        // The whole point: with only one left-half member left, a right-half
+        // placement takes its free space from that one resized window.
+        let ozSurvivor = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 14806, action: .leftHalf, frame: ozLeft),
+        ])
+        expect(SnapGroupSupport.freeSpace(for: .rightHalf, theoreticalZone: ozRight,
+                                          group: ozSurvivor, gap: 0,
+                                          currentFrames: [14806: CGRect(x: 0, y: 0, width: 700, height: 949)])
+               == CGRect(x: 700, y: 0, width: 812, height: 949),
+               "and the right half fills exactly what that one window leaves")
+
+        // A window evicted from the group is a candidate again: nothing about
+        // having once been snapped keeps it out of the overlay.
+        let ozAfterEviction = SnapGroup(screenID: 1, members: [
+            SnapGroupMember(windowID: 99, action: .leftHalf, frame: ozLeft),
+        ])
+        let ozOccupants = ozAfterEviction.members.map {
+            SnapAssistSupport.OccupyingMember(windowID: $0.windowID, action: $0.action,
+                                              zone: $0.frame, liveFrame: $0.frame)
+        }
+        expect(SnapAssistSupport.occupant(of: .rightHalf, cellFrame: ozRight,
+                                          members: ozOccupants, zoneTolerance: 3) == nil,
+               "the evicted windows hold no cell, so the right half is free to offer")
+        expect(SnapAssistSupport.candidates(mru: [10776, 14733, 14806], excluding: [99])
+               == [10776, 14733, 14806],
+               "and all three of them are offerable again")
+
         // MARK: Stale Snap Group members
 
         // The capture: a 1512x949 screen whose group still held two windows

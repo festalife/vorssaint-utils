@@ -135,7 +135,7 @@ final class SnapGroupStore {
                 appliedRect: CGRect,
                 preSnapSize: CGSize,
                 on screen: NSScreen) {
-        let existing = groups[screen.displayID] ?? SnapGroup(screenID: screen.displayID)
+        var existing = groups[screen.displayID] ?? SnapGroup(screenID: screen.displayID)
         let snapshot = liveFrames(for: existing, on: screen)
         // The member's zone is the action's *theoretical* rect on this screen,
         // never the rect the placement actually wrote. The two differ exactly
@@ -143,6 +143,29 @@ final class SnapGroupStore {
         // borrowed rect made the zone grow with it — so the next placement
         // measured against an inflated "half" and grew again.
         let zone = theoreticalZone(for: action, on: screen)
+
+        // One window per zone, one layout family at a time. Without this a
+        // person who snaps three different windows left over an afternoon ends
+        // up with three members all claiming the left half, and every later
+        // decision — free space, cell occupancy, who may be offered — is made
+        // against whichever of them happens to be consulted.
+        let evicted = SnapGroupSupport.evictions(from: existing,
+                                                 placing: windowID,
+                                                 zone: zone,
+                                                 appliedFrame: appliedRect,
+                                                 currentFrames: snapshot.frames,
+                                                 gap: WindowLayoutGaps.windowGap)
+        for eviction in evicted {
+            SnapLog.event("group.evict",
+                          "windowID=\(eviction.windowID) reason=\(eviction.reason.rawValue) "
+                              + "displacedBy=\(windowID) action=\(action)")
+            lastLiveFrames.removeValue(forKey: eviction.windowID)
+            acceptedMinimums.removeValue(forKey: eviction.windowID)
+            latestRequest.removeValue(forKey: eviction.windowID)
+        }
+        let evictedIDs = Set(evicted.map(\.windowID))
+        existing.members.removeAll { evictedIDs.contains($0.windowID) }
+
         let updated = SnapGroupSupport.updated(group: existing,
                                                windowID: windowID,
                                                action: action,
@@ -244,12 +267,12 @@ final class SnapGroupStore {
     /// or was dragged away cannot keep a cell reserved. `excluding` is the
     /// window that was just placed, which is never its own obstacle.
     func occupancyMembers(on screen: NSScreen,
-                          excluding windowID: CGWindowID) -> [SnapAssistSupport.OccupyingMember] {
+                          excluding windowID: CGWindowID?) -> [SnapAssistSupport.OccupyingMember] {
         let group = pruned(on: screen)
         guard !group.members.isEmpty else { return [] }
         let resolved = resolvedFrames(for: group, on: screen)
         return group.members
-            .filter { $0.windowID != windowID }
+            .filter { windowID == nil || $0.windowID != windowID }
             .map {
                 SnapAssistSupport.OccupyingMember(windowID: $0.windowID,
                                                   action: $0.action,

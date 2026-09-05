@@ -1282,8 +1282,14 @@ extension SnapController {
     private func offering(for cell: WindowLayoutAction,
                           placedWindowID: CGWindowID,
                           screen: NSScreen) -> (freeRect: CGRect, items: [SwitcherItem])? {
+        // Only a window holding a cell of *this* layout family is out of the
+        // running — not every window that has ever been snapped on this
+        // screen. Excluding all of them is what left a real user's overlay
+        // offering nothing but minimized apps: every visible window on the
+        // screen had been snapped at some point, so every one of them was
+        // dropped as "already in the group".
         var excluded: Set<CGWindowID> = [placedWindowID]
-        excluded.formUnion(groups.pruned(on: screen).members.map(\.windowID))
+        excluded.formUnion(layoutFamilyOccupants(of: cell, on: screen))
 
         let items: [SwitcherItem]
         if let established = sessionCandidates {
@@ -1316,6 +1322,28 @@ extension SnapController {
             return nil
         }
         return (freeRect, items)
+    }
+
+    /// The windows currently holding a cell of the layout family `cell`
+    /// belongs to — the same question `occupiedSiblings` asks, over the whole
+    /// family rather than just the siblings of one placement.
+    private func layoutFamilyOccupants(of cell: WindowLayoutAction, on screen: NSScreen) -> Set<CGWindowID> {
+        let members = groups.occupancyMembers(on: screen, excluding: nil)
+        guard !members.isEmpty else { return [] }
+        let tolerance = max(3, WindowLayoutGaps.windowGap + 3)
+        var holders: Set<CGWindowID> = []
+        for family in [cell] + SnapAssistSupport.siblingZones(of: cell) {
+            let rect = WindowLayoutGeometry.rect(for: family,
+                                                 current: screen.visibleFrame,
+                                                 visibleFrame: screen.visibleFrame,
+                                                 windowGap: WindowLayoutGaps.windowGap,
+                                                 screenGap: WindowLayoutGaps.screenGap)
+            if let holder = SnapAssistSupport.occupant(of: family, cellFrame: rect,
+                                                       members: members, zoneTolerance: tolerance) {
+                holders.insert(holder)
+            }
+        }
+        return holders
     }
 
     private func presentAssist(cell: WindowLayoutAction, placedWindowID: CGWindowID, screen: NSScreen) {
@@ -1455,7 +1483,7 @@ extension SnapController {
         for window in SnapAX.onScreenWindows(on: screen) {
             enumerated += 1
             guard window.ownerPID != ownPID else { drop("own window"); continue }
-            guard !excluded.contains(window.windowID) else { drop("already in the group"); continue }
+            guard !excluded.contains(window.windowID) else { drop("holds a cell of this layout"); continue }
             guard let app = NSRunningApplication(processIdentifier: window.ownerPID), !app.isTerminated,
                   app.activationPolicy == .regular
             else { drop("not a regular app"); continue }
@@ -1479,7 +1507,7 @@ extension SnapController {
                       let windowID = AXWindowResolver.windowID(for: element)
                 else { continue }
                 enumerated += 1
-                guard !excluded.contains(windowID) else { drop("already in the group"); continue }
+                guard !excluded.contains(windowID) else { drop("holds a cell of this layout"); continue }
                 guard byWindowID[windowID] == nil else { continue }
                 guard SnapAX.isPlaceableWindow(element, allowMinimized: true) else {
                     drop("not placeable")

@@ -269,6 +269,88 @@ enum SnapGroupSupport {
         return result
     }
 
+    /// Why a member had to leave the group when another window was placed.
+    enum Eviction: String {
+        /// Another window was placed into the very zone this member held.
+        case zoneTaken = "zone-taken"
+        /// The new placement's zone overlaps this member's by half or more of
+        /// the smaller of the two — a different layout family has taken over.
+        case zoneOverlap = "zone-overlap"
+        /// The new placement's frame now covers half or more of where this
+        /// member actually is.
+        case covered
+    }
+
+    /// How much two zones must overlap, as a fraction of the smaller one,
+    /// before the newer placement is taken to have replaced the older — and
+    /// how much of a member's live frame a new placement must cover before the
+    /// member is taken to be underneath it.
+    private static let evictionOverlapThreshold: CGFloat = 0.5
+
+    /// Which existing members a placement of `zone` displaces.
+    ///
+    /// **One window per zone, and one layout family at a time.** Windows keeps
+    /// no memory of a window that used to be in a slot once another one is put
+    /// there, and a real capture shows why that matters: a person who snapped
+    /// Notes left, then the terminal left, then WhatsApp left ended up with a
+    /// group holding three members all claiming `leftHalf`. All three were
+    /// still on screen and still anchored, so nothing ever pruned them. The
+    /// next right-half placement then took its free space from whichever of
+    /// the three happened to be consulted, Snap Assist read every cell as
+    /// occupied, and — because every group member is excluded from the
+    /// candidate list — the overlay could only offer minimized windows, which
+    /// is exactly what the person reported seeing.
+    ///
+    /// Three rules, checked in that order per member:
+    /// - the same zone is taken over outright;
+    /// - a zone overlapping the new one by `evictionOverlapThreshold` of the
+    ///   smaller area is a different layout family being replaced (a left half
+    ///   when a top-left quarter is placed, and the other way round);
+    /// - a member whose *live* frame is that covered by the new placement is
+    ///   underneath it and no longer part of any visible layout.
+    ///
+    /// `windowID` is the window being placed and is never evicted by its own
+    /// placement. A member missing from `currentFrames` is only ever judged on
+    /// its zone, never guessed at.
+    static func evictions(from group: SnapGroup,
+                          placing windowID: CGWindowID,
+                          zone: CGRect,
+                          appliedFrame: CGRect,
+                          currentFrames: [CGWindowID: CGRect] = [:],
+                          gap: CGFloat = 0) -> [(windowID: CGWindowID, reason: Eviction)] {
+        let tolerance = edgeTolerance(gap: gap)
+        return group.members.compactMap { member -> (windowID: CGWindowID, reason: Eviction)? in
+            guard member.windowID != windowID else { return nil }
+            if abs(member.frame.minX - zone.minX) <= tolerance,
+               abs(member.frame.minY - zone.minY) <= tolerance,
+               abs(member.frame.maxX - zone.maxX) <= tolerance,
+               abs(member.frame.maxY - zone.maxY) <= tolerance {
+                return (member.windowID, .zoneTaken)
+            }
+            if overlapFraction(member.frame, zone, ofSmaller: true) >= evictionOverlapThreshold {
+                return (member.windowID, .zoneOverlap)
+            }
+            if let live = currentFrames[member.windowID],
+               overlapFraction(live, appliedFrame, ofSmaller: false) >= evictionOverlapThreshold {
+                return (member.windowID, .covered)
+            }
+            return nil
+        }
+    }
+
+    /// The overlap of `a` and `b` as a fraction of either the smaller of the
+    /// two areas or, when `ofSmaller` is false, of `a`'s own area.
+    private static func overlapFraction(_ a: CGRect, _ b: CGRect, ofSmaller: Bool) -> CGFloat {
+        let intersection = a.intersection(b)
+        guard !intersection.isNull, !intersection.isEmpty else { return 0 }
+        let overlap = intersection.width * intersection.height
+        let areaA = a.width * a.height
+        let areaB = b.width * b.height
+        let denominator = ofSmaller ? min(areaA, areaB) : areaA
+        guard denominator > 0 else { return 0 }
+        return overlap / denominator
+    }
+
     /// The zone actually available for `action`: each edge `theoreticalZone`
     /// shares with a group member's zone is replaced outright by that
     /// member's *current* frame — not the frame that was originally applied,
